@@ -9,6 +9,7 @@ import secrets
 import hashlib
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import quote_plus
 
 import streamlit as st
 from pypdf import PdfReader
@@ -23,13 +24,16 @@ from openai import AuthenticationError, RateLimitError, BadRequestError
 # - Usage dashboard (user + admin)
 # - PDF -> Summary + Exam (one question at a time)
 # - Beta limiter (sessions per email)
-# - Feedback button (Google Form)
+# - Feedback button (Google Form) + local feedback fallback log
+# - Study type selector (3 buttons)
+# - Book mode: CUSTOM PAGE RANGE per chapter (NO autodetect in Beta)
+# - NEW: Forgot password reset (admin reset code for Beta)
 # ============================================================
 
 # --- MUST be first Streamlit call ---
 st.set_page_config(page_title="Examora (Beta)", layout="wide")
 
-# --- Your Google Form link ---
+# --- Your Google Form link (base) ---
 FEEDBACK_URL = "https://docs.google.com/forms/d/e/1FAIpQLSc1n_uvwsnr1NpXiY_1SCg5_t_6MnsWVgG54z2NZHgVJOrkVw/viewform?usp=header"
 
 
@@ -44,6 +48,9 @@ BETA_LIMIT = int(os.getenv("EXAMORA_BETA_LIMIT") or "20")
 ADMIN_EMAIL = (os.getenv("EXAMORA_ADMIN_EMAIL") or "").strip().lower()
 ADMIN_PASSWORD = os.getenv("EXAMORA_ADMIN_PASSWORD") or ""
 
+# NEW (Beta): simple reset code (admin shares manually)
+RESET_CODE = (os.getenv("EXAMORA_RESET_CODE") or "").strip()
+
 client = OpenAI()  # reads OPENAI_API_KEY from environment
 
 
@@ -55,6 +62,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 USAGE_FILE = DATA_DIR / "beta_usage.json"
 USERS_FILE = DATA_DIR / "users.json"
+FEEDBACK_LOG_FILE = DATA_DIR / "feedback_log.json"   # NEW: local fallback log
 
 
 # -----------------------------
@@ -80,6 +88,22 @@ def looks_like_email(email: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
 
 
+def build_prefilled_feedback_url(base_url: str, user_email: str) -> str:
+    """
+    OPTIONAL: Prefill an email field if your Google Form supports prefill query params.
+    This will NOT work unless you create a prefilled link in Google Forms and use the correct entry.<id>.
+    """
+    EMAIL_ENTRY_ID = os.getenv("EXAMORA_FEEDBACK_EMAIL_ENTRY_ID", "").strip()  # e.g., "1234567890"
+
+    if not user_email or not looks_like_email(user_email):
+        return base_url
+    if not EMAIL_ENTRY_ID:
+        return base_url
+
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}usp=pp_url&entry.{EMAIL_ENTRY_ID}={quote_plus(user_email)}"
+
+
 # -----------------------------
 # Safe file IO
 # -----------------------------
@@ -94,6 +118,21 @@ def _read_json(path: Path, default):
 
 def _write_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# -----------------------------
+# Feedback fallback log (NEW)
+# -----------------------------
+def load_feedback_log() -> list:
+    data = _read_json(FEEDBACK_LOG_FILE, [])
+    return data if isinstance(data, list) else []
+
+
+def append_feedback_log(item: dict) -> None:
+    log = load_feedback_log()
+    log.append(item)
+    log = log[-300:]
+    _write_json(FEEDBACK_LOG_FILE, log)
 
 
 # -----------------------------
@@ -123,7 +162,6 @@ def increment_exam_session(email: str, meta: dict) -> int:
     usage[email]["exam_sessions_used"] = int(usage[email].get("exam_sessions_used", 0)) + 1
     usage[email]["last_used_at"] = now_ts()
 
-    # keep lightweight history (cap last 50)
     hist = usage[email].get("history", [])
     hist.append(meta)
     usage[email]["history"] = hist[-50:]
@@ -153,8 +191,8 @@ def usage_to_csv_bytes(usage: dict) -> bytes:
 PBKDF2_ITERS = 150_000
 
 
-def pbkdf2_hash(password: str, salt_b64: str) -> str:
-    salt = bytes.fromhex(salt_b64)
+def pbkdf2_hash(password: str, salt_hex: str) -> str:
+    salt = bytes.fromhex(salt_hex)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERS)
     return dk.hex()
 
@@ -172,7 +210,6 @@ def save_users(users: dict) -> None:
 
 
 def ensure_admin_user_exists():
-    # Optional: auto-create admin user if env vars are provided
     if not ADMIN_EMAIL or not ADMIN_PASSWORD:
         return
     users = load_users()
@@ -232,6 +269,30 @@ def verify_login(email: str, password: str) -> tuple[bool, str]:
     return True, "Logged in."
 
 
+def reset_password_with_code(email: str, reset_code: str, new_password: str) -> tuple[bool, str]:
+    email = normalize_email(email)
+
+    if not looks_like_email(email):
+        return False, "Please enter a valid email."
+    if not RESET_CODE:
+        return False, "Password reset is not configured. Ask admin to set EXAMORA_RESET_CODE in .env."
+    if (reset_code or "").strip() != RESET_CODE:
+        return False, "Invalid reset code."
+    if len(new_password) < 8:
+        return False, "New password must be at least 8 characters."
+
+    users = load_users()
+    if email not in users:
+        return False, "No account found for this email. Please register."
+
+    salt = new_salt_hex()
+    users[email]["salt"] = salt
+    users[email]["pwd_hash"] = pbkdf2_hash(new_password, salt)
+    users[email]["pwd_reset_at"] = now_ts()
+    save_users(users)
+    return True, "Password reset successful. You can log in now."
+
+
 def get_role(email: str) -> str:
     email = normalize_email(email)
     users = load_users()
@@ -264,12 +325,20 @@ def safe_call(fn, *args, **kwargs):
 # -----------------------------
 # PDF extraction
 # -----------------------------
+def _seek0(file_obj):
+    try:
+        file_obj.seek(0)
+    except Exception:
+        pass
+
+
 def extract_text_from_pdf_pages(file, start_page: int, end_page: int) -> tuple[str, int, int, int]:
+    _seek0(file)
     reader = PdfReader(file)
     n_pages = len(reader.pages)
 
-    start = max(1, min(start_page, n_pages))
-    end = max(1, min(end_page, n_pages))
+    start = max(1, min(int(start_page), n_pages))
+    end = max(1, min(int(end_page), n_pages))
     if end < start:
         start, end = end, start
 
@@ -283,7 +352,7 @@ def chunk_text(text: str, max_chars: int = 12000) -> list[str]:
     text = (text or "").strip()
     if not text:
         return []
-    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+    return [text[i: i + max_chars] for i in range(0, len(text), max_chars)]
 
 
 # -----------------------------
@@ -317,7 +386,8 @@ def summarize_text(text: str) -> str:
     chunks = chunk_text(text, max_chars=12000)
     if not chunks:
         return "No text available to summarize."
-    first_chunk = chunks[0]
+
+    input_text = "\n\n".join(chunks[:3])
 
     resp = client.responses.create(
         model="gpt-5",
@@ -338,7 +408,7 @@ def summarize_text(text: str) -> str:
             "- Do not invent details.\n"
             "- If something is unclear, explicitly say it is unclear.\n"
         ),
-        input=first_chunk,
+        input=input_text,
     )
     return resp.output_text.strip()
 
@@ -347,7 +417,8 @@ def generate_mcqs_json(text: str, n_questions: int, difficulty: str) -> dict:
     chunks = chunk_text(text, max_chars=12000)
     if not chunks:
         return {"questions": []}
-    first_chunk = chunks[0]
+
+    input_text = "\n\n".join(chunks[:3])
     diff_hint = _difficulty_hint(difficulty)
 
     instructions = (
@@ -376,7 +447,7 @@ def generate_mcqs_json(text: str, n_questions: int, difficulty: str) -> dict:
         model="gpt-5",
         reasoning={"effort": "low"},
         instructions=instructions,
-        input=first_chunk,
+        input=input_text,
     )
 
     data = _extract_json(resp.output_text)
@@ -457,6 +528,22 @@ def init_state():
     st.session_state.setdefault("flagged", set())
     st.session_state.setdefault("submitted", False)
 
+    # study mode
+    st.session_state.setdefault("study_mode", "Single Document / TG Reports etc. (Default)")
+
+    # book navigation
+    st.session_state.setdefault("book_start", 1)
+    st.session_state.setdefault("book_end", 10)
+    st.session_state.setdefault("book_title", "Chapter 1")
+    st.session_state.setdefault("book_step", 10)  # how many pages to jump by Prev/Next
+
+    # manual list mode
+    st.session_state.setdefault("manual_chapters_text", "")
+    st.session_state.setdefault("manual_section_idx", 0)
+
+    # quick split mode
+    st.session_state.setdefault("quick_section_idx", 0)
+
 
 def reset_exam_state():
     st.session_state.exam_open = False
@@ -513,11 +600,21 @@ div.stButton > button { border-radius: 12px !important; font-weight: 800 !import
 # -----------------------------
 st.sidebar.markdown("## Examora (Beta)")
 
+# DEBUG STAMP: proves which file is running + last modified
+try:
+    this_file = os.path.abspath(__file__)
+    mtime = datetime.fromtimestamp(os.path.getmtime(this_file)).strftime("%Y-%m-%d %H:%M:%S")
+    st.sidebar.caption(f"Running: `{this_file}`")
+    st.sidebar.caption(f"Last saved: {mtime}")
+except Exception:
+    st.sidebar.caption("Running file stamp unavailable (packaged environment).")
+
 auth_tab = st.sidebar.radio("Account", ["Login", "Register", "Dashboard"], index=0)
 
 if auth_tab == "Login":
     email = st.sidebar.text_input("Email", value=st.session_state.auth_email, placeholder="name@example.com")
     password = st.sidebar.text_input("Password", type="password")
+
     if st.sidebar.button("Log in"):
         email = normalize_email(email)
         ok, msg = verify_login(email, password)
@@ -529,8 +626,28 @@ if auth_tab == "Login":
         else:
             st.sidebar.error(msg)
 
-    st.sidebar.caption("Admin access appears automatically when your email matches the configured admin user.")
-    st.sidebar.link_button("Submit Beta Feedback", FEEDBACK_URL)
+    with st.sidebar.expander("Forgot password?"):
+        st.caption("Beta reset uses an admin-provided reset code.")
+        fp_email = st.text_input("Account email", key="fp_email", placeholder="name@example.com")
+        fp_code = st.text_input("Reset code", key="fp_code", type="password")
+        fp_new1 = st.text_input("New password (min 8 chars)", key="fp_new1", type="password")
+        fp_new2 = st.text_input("Confirm new password", key="fp_new2", type="password")
+
+        if st.button("Reset password"):
+            if fp_new1 != fp_new2:
+                st.error("Passwords do not match.")
+            else:
+                ok, msg = reset_password_with_code(fp_email, fp_code, fp_new1)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+        if not RESET_CODE:
+            st.warning("Admin: set EXAMORA_RESET_CODE in .env to enable resets.")
+
+    feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, normalize_email(email))
+    st.sidebar.link_button("Submit Beta Feedback", feedback_link)
 
 elif auth_tab == "Register":
     email = st.sidebar.text_input("Email", placeholder="name@example.com")
@@ -547,7 +664,8 @@ elif auth_tab == "Register":
             else:
                 st.sidebar.error(msg)
 
-    st.sidebar.link_button("Submit Beta Feedback", FEEDBACK_URL)
+    feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, normalize_email(email))
+    st.sidebar.link_button("Submit Beta Feedback", feedback_link)
 
 elif auth_tab == "Dashboard":
     if not st.session_state.is_authed:
@@ -569,9 +687,9 @@ elif auth_tab == "Dashboard":
             st.session_state.summary_text = ""
             st.rerun()
 
-        st.sidebar.link_button("Submit Beta Feedback", FEEDBACK_URL)
+        feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, email)
+        st.sidebar.link_button("Submit Beta Feedback", feedback_link)
 
-        # Admin dashboard controls
         if role == "admin":
             st.sidebar.divider()
             st.sidebar.markdown("### Admin Tools")
@@ -583,6 +701,12 @@ elif auth_tab == "Dashboard":
                 mime="text/csv",
             )
 
+            st.sidebar.markdown("### Feedback fallback log (local)")
+            fb = load_feedback_log()
+            st.sidebar.caption(f"Local feedback entries: {len(fb)}")
+            if fb:
+                for row in fb[-5:][::-1]:
+                    st.sidebar.write(f"- {ts_to_str(row.get('ts',0))} | {row.get('email','')} | {row.get('note','')[:40]}")
 
 # -----------------------------
 # Main header
@@ -595,9 +719,23 @@ if not st.session_state.is_authed:
     st.stop()
 
 user_email = st.session_state.auth_email
+# After login gate:
+user_email = st.session_state.auth_email
 role = get_role(user_email)
 
-# Admin usage dashboard (main area)
+# ✅ Add Logout button (always available)
+st.sidebar.divider()
+if st.sidebar.button("Log out"):
+    st.session_state.is_authed = False
+    st.session_state.auth_email = ""
+    reset_exam_state()
+    st.session_state.summary_open = False
+    st.session_state.summary_text = ""
+    st.rerun()
+
+role = get_role(user_email)
+
+# Dashboard page (main area)
 if auth_tab == "Dashboard":
     st.markdown("### Your Usage")
     u = get_user_usage(user_email)
@@ -616,42 +754,11 @@ if auth_tab == "Dashboard":
             )
     else:
         st.info("No exam history yet.")
-
-    if role == "admin":
-        st.divider()
-        st.markdown("### Admin Usage Dashboard")
-        all_usage = load_usage()
-        total_users = len(all_usage)
-        total_sessions = sum(int(v.get("exam_sessions_used", 0)) for v in all_usage.values())
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total users", total_users)
-        c2.metric("Total exam sessions", total_sessions)
-        c3.metric("Beta session limit", BETA_LIMIT)
-
-        # Top users
-        top = sorted(
-            [(email, int(v.get("exam_sessions_used", 0))) for email, v in all_usage.items()],
-            key=lambda x: x[1],
-            reverse=True,
-        )[:15]
-
-        st.markdown("#### Top Users (by exam sessions)")
-        for e, n in top:
-            st.write(f"- {e}: {n}")
-
-        st.download_button(
-            "Download Usage CSV",
-            data=usage_to_csv_bytes(all_usage),
-            file_name="examora_beta_usage.csv",
-            mime="text/csv",
-        )
-
     st.stop()
 
 
 # -----------------------------
-# Upload + page range
+# Upload + Study Type
 # -----------------------------
 st.divider()
 uploaded = st.file_uploader("Upload a text-based PDF", type=["pdf"])
@@ -659,28 +766,302 @@ if not uploaded:
     st.info("Upload a PDF to begin.")
     st.stop()
 
+_seek0(uploaded)
 reader_for_count = PdfReader(uploaded)
 total_pages = len(reader_for_count.pages)
-st.caption(f"PDF pages detected: {total_pages}")
+pdf_name = getattr(uploaded, "name", "PDF")
+st.caption(f"PDF: {pdf_name} • Pages detected: {total_pages}")
 
-colA, colB = st.columns(2)
-with colA:
-    start_page = st.number_input("Start page", min_value=1, max_value=max(1, total_pages), value=1, step=1)
-with colB:
-    end_page = st.number_input("End page", min_value=1, max_value=max(1, total_pages), value=min(5, total_pages), step=1)
+st.markdown("### What are you studying?")
+study_mode = st.radio(
+    label="",
+    options=[
+        "Single Document / TG Reports etc. (Default)",
+        "Book (Chapter-by-chapter / Enter chapter pages)",
+        "Book (Autodetect) — Not available in Beta",
+    ],
+    index=0,
+    horizontal=True,
+    key="study_mode",
+)
 
-with st.spinner("Reading your material..."):
-    text, _, sp, ep = extract_text_from_pdf_pages(uploaded, int(start_page), int(end_page))
+if study_mode.startswith("Book (Autodetect)"):
+    st.info("🚧 **Book (Autodetect)** is **not available in Beta**. Use **Book (Chapter-by-chapter)**.")
+    is_book_mode = True
+else:
+    is_book_mode = study_mode.startswith("Book")
 
-if len(text) < 500:
-    st.error(
-        "I couldn’t extract enough text. This PDF may be scanned/protected, or the page range is too small.\n\n"
-        "Try a text-based PDF or increase page range."
+
+# -----------------------------
+# BOOK MODE (NO autodetect): choose chapter pages directly
+# -----------------------------
+start_page, end_page = 1, min(5, total_pages)
+section_label = ""
+section_title = ""
+section_num = None
+total_sections = 0
+
+if is_book_mode:
+    st.session_state.scope_mode = "Book (chapter-by-chapter)"
+    st.markdown("### Book Mode")
+    st.caption("Pick a **page range for one chapter**. Examora reads **only that range**.")
+
+    chapter_source = st.radio(
+        "Chapter selection",
+        [
+            "Custom page range (this chapter)",
+            "Manual chapters (enter page ranges)",
+            "Quick split (every N pages)",
+        ],
+        horizontal=True,
+        index=0,
+        key="book_chapter_source",
     )
-    st.stop()
 
-st.success(f"✅ I’ve read your material (pages {sp}–{ep}). What would you like to do next?")
-st.caption("Tip: choose a focused chapter range for best question quality.")
+    # --- Custom page range (the main thing you asked for) ---
+    if chapter_source.startswith("Custom"):
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
+            start_page = st.number_input(
+                "Start page",
+                min_value=1,
+                max_value=total_pages,
+                value=int(st.session_state.book_start),
+                step=1,
+                key="book_start_input",
+            )
+        with c2:
+            end_page = st.number_input(
+                "End page",
+                min_value=1,
+                max_value=total_pages,
+                value=int(st.session_state.book_end),
+                step=1,
+                key="book_end_input",
+            )
+        with c3:
+            section_title = st.text_input(
+                "Chapter name (optional)",
+                value=st.session_state.book_title,
+                key="book_title_input",
+            )
+
+        # normalize + persist
+        a = int(start_page)
+        b = int(end_page)
+        if b < a:
+            a, b = b, a
+        a = max(1, min(a, total_pages))
+        b = max(1, min(b, total_pages))
+
+        st.session_state.book_start = a
+        st.session_state.book_end = b
+        st.session_state.book_title = (section_title or "").strip() or "Selected Chapter"
+        section_title = st.session_state.book_title
+        section_label = f" — {section_title}"
+
+        # page step for next/prev
+        step = int(b - a + 1)
+        st.session_state.book_step = max(1, step)
+
+        pprev, pnext = st.columns([1, 1])
+        with pprev:
+            if st.button("◀ Previous range", key="book_prev_range"):
+                step = int(st.session_state.book_step)
+                new_a = max(1, a - step)
+                new_b = max(1, b - step)
+                if new_b < new_a:
+                    new_b = new_a
+                st.session_state.book_start = new_a
+                st.session_state.book_end = new_b
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+        with pnext:
+            if st.button("Next range ▶", key="book_next_range"):
+                step = int(st.session_state.book_step)
+                new_a = min(total_pages, a + step)
+                new_b = min(total_pages, b + step)
+                if new_b < new_a:
+                    new_b = new_a
+                st.session_state.book_start = new_a
+                st.session_state.book_end = new_b
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+
+        start_page, end_page = a, b
+        section_num = 1
+        total_sections = 1
+
+    # --- Manual chapters list ---
+    elif chapter_source.startswith("Manual"):
+        st.warning("Define chapters using page ranges. Works for any book PDF.")
+
+        default_example = (
+            "Chapter 1: 1-18\n"
+            "Chapter 2: 19-42\n"
+            "Chapter 3: 43-70\n"
+        )
+
+        raw = st.text_area(
+            "Enter chapters (one per line) as: Chapter Name: start-end",
+            value=st.session_state.manual_chapters_text or default_example,
+            height=140,
+        )
+        st.session_state.manual_chapters_text = raw
+
+        manual_sections = []
+        for line in (raw or "").splitlines():
+            line = line.strip()
+            if not line or ":" not in line or "-" not in line:
+                continue
+            name, rng = line.split(":", 1)
+            name = name.strip()
+            rng = rng.strip()
+            m = re.match(r"^\s*(\d+)\s*-\s*(\d+)\s*$", rng)
+            if not m:
+                continue
+            a, b = int(m.group(1)), int(m.group(2))
+            a = max(1, min(a, total_pages))
+            b = max(1, min(b, total_pages))
+            if b < a:
+                a, b = b, a
+            manual_sections.append({"title": name, "start": a, "end": b})
+
+        if not manual_sections:
+            st.error("No valid chapters parsed yet. Use format: Chapter Name: start-end")
+            st.stop()
+
+        total_sections = len(manual_sections)
+        labels = [f"{i+1}. {s['title']} (pp. {s['start']}-{s['end']})" for i, s in enumerate(manual_sections)]
+
+        idx = st.selectbox(
+            "Choose chapter",
+            list(range(len(labels))),
+            index=min(st.session_state.manual_section_idx, len(labels) - 1),
+            format_func=lambda i: labels[i],
+        )
+        st.session_state.manual_section_idx = int(idx)
+
+        start_page = manual_sections[idx]["start"]
+        end_page = manual_sections[idx]["end"]
+        section_title = manual_sections[idx]["title"]
+        section_num = idx + 1
+        section_label = f" — {section_title}"
+
+        cprev, cnext = st.columns([1, 1])
+        with cprev:
+            if st.button("◀ Previous chapter", disabled=(idx <= 0), key="book_prev_manual"):
+                st.session_state.manual_section_idx = max(0, idx - 1)
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+        with cnext:
+            if st.button("Next chapter ▶", disabled=(idx >= len(manual_sections) - 1), key="book_next_manual"):
+                st.session_state.manual_section_idx = min(len(manual_sections) - 1, idx + 1)
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+
+    # --- Quick split ---
+    else:
+        st.info("Quick split is a fast fallback if you don’t want to type chapter ranges.")
+        pages_per = st.number_input("Pages per chapter", min_value=5, max_value=50, value=20, step=5)
+
+        quick_sections = []
+        start = 1
+        ch = 1
+        while start <= total_pages:
+            end = min(total_pages, start + int(pages_per) - 1)
+            quick_sections.append({"title": f"Chapter {ch} (pages {start}-{end})", "start": start, "end": end})
+            start = end + 1
+            ch += 1
+
+        total_sections = len(quick_sections)
+        labels = [f"{i+1}. {s['title']}" for i, s in enumerate(quick_sections)]
+
+        idx = st.selectbox(
+            "Choose chapter chunk",
+            list(range(len(labels))),
+            index=min(st.session_state.quick_section_idx, len(labels) - 1),
+            format_func=lambda i: labels[i],
+        )
+        st.session_state.quick_section_idx = int(idx)
+
+        start_page = quick_sections[idx]["start"]
+        end_page = quick_sections[idx]["end"]
+        section_title = quick_sections[idx]["title"]
+        section_num = idx + 1
+        section_label = f" — {section_title}"
+
+        cprev, cnext = st.columns([1, 1])
+        with cprev:
+            if st.button("◀ Previous", disabled=(idx <= 0), key="book_prev_quick"):
+                st.session_state.quick_section_idx = max(0, idx - 1)
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+        with cnext:
+            if st.button("Next ▶", disabled=(idx >= len(quick_sections) - 1), key="book_next_quick"):
+                st.session_state.quick_section_idx = min(len(quick_sections) - 1, idx + 1)
+                reset_exam_state()
+                st.session_state.summary_open = False
+                st.session_state.summary_text = ""
+                st.rerun()
+
+    with st.spinner("Reading selected chapter..."):
+        text, _, sp, ep = extract_text_from_pdf_pages(uploaded, int(start_page), int(end_page))
+
+    if len(text) < 500:
+        st.error("I couldn’t extract enough text from this range. Try a different range or a text-based PDF.")
+        st.stop()
+
+    st.success(f"✅ Ready: **{section_title or 'Selected Chapter'}** (pages {sp}–{ep}).")
+    st.caption("Generate Summary/Exam for this chapter range. Then move to the next range/chapter.")
+    st.info("📌 Examora has **NOT** read the full book. It reads **one chapter/range at a time** in Book Mode.")
+
+# -----------------------------
+# SINGLE DOCUMENT MODE
+# -----------------------------
+else:
+    st.session_state.scope_mode = "Single Document/TG Reports etc."
+    st.markdown("### Single Document / Report Mode")
+    st.caption("Best for TG reports, guidelines, papers, and short documents.")
+
+    scope = st.radio("Reading scope", ["Selected pages", "Whole document"], horizontal=True)
+
+    if scope == "Whole document":
+        start_page, end_page = 1, total_pages
+        st.info("Whole document selected. Examora will read the entire document.")
+    else:
+        colA, colB = st.columns(2)
+        with colA:
+            start_page = st.number_input("Start page", min_value=1, max_value=max(1, total_pages), value=1, step=1)
+        with colB:
+            end_page = st.number_input("End page", min_value=1, max_value=max(1, total_pages), value=min(5, total_pages), step=1)
+
+    with st.spinner("Reading your selected material..."):
+        text, _, sp, ep = extract_text_from_pdf_pages(uploaded, int(start_page), int(end_page))
+
+    if len(text) < 500:
+        st.error(
+            "I couldn’t extract enough text. This PDF may be scanned/protected, or the page range is too small.\n\n"
+            "Try a text-based PDF or increase page range."
+        )
+        st.stop()
+
+    if scope == "Whole document":
+        st.success(f"✅ I’ve read the **entire document**: {pdf_name} (pages 1–{total_pages}).")
+    else:
+        st.success(f"✅ I’ve read a selected range from {pdf_name} (pages {sp}–{ep}).")
+
+st.caption("Tip: choose a focused chapter/section for best question quality.")
 
 # -----------------------------
 # Summary
@@ -698,15 +1079,27 @@ with a1:
 
 with a2:
     st.write("")
+
 with a3:
-    st.link_button("Submit Beta Feedback", FEEDBACK_URL)
+    feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, user_email)
+    st.link_button("Submit Beta Feedback", feedback_link)
+
+with st.expander("Having issues with the Google feedback form? Leave feedback here (fallback)."):
+    st.caption("This stores feedback locally on the server in .examora/feedback_log.json")
+    fb_note = st.text_area("Your feedback", height=100, key="fb_note")
+    if st.button("Save feedback (local)"):
+        if not (fb_note or "").strip():
+            st.warning("Please type feedback first.")
+        else:
+            append_feedback_log({"ts": now_ts(), "email": user_email, "note": fb_note.strip()})
+            st.success("Saved locally. Thank you!")
 
 if st.session_state.summary_open:
     st.markdown(
         f"""
 <div class="examora-card">
   <div class="examora-title">Examora Study Summary</div>
-  <div class="examora-subtitle">Generated from pages {sp}–{ep}</div>
+  <div class="examora-subtitle">Generated from pages {sp}–{ep}{section_label}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -763,6 +1156,9 @@ with g1:
                 "pages": f"{sp}-{ep}",
                 "n_questions": n_questions,
                 "difficulty": difficulty,
+                "scope": st.session_state.scope_mode,
+                "section_title": (section_label.strip(" —") if section_label else ""),
+                "pdf_name": getattr(uploaded, "name", ""),
             }
             new_used = increment_exam_session(user_email, meta)
             st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
@@ -776,7 +1172,8 @@ with g2:
         st.rerun()
 
 with g3:
-    st.link_button("Submit Beta Feedback", FEEDBACK_URL)
+    feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, user_email)
+    st.link_button("Submit Beta Feedback", feedback_link)
 
 # -----------------------------
 # Exam panel
@@ -787,19 +1184,18 @@ if not st.session_state.exam_open or not st.session_state.questions:
 
 questions = st.session_state.questions
 total = len(questions)
-study_mode = mode.startswith("Study Mode")
+study_mode_now = mode.startswith("Study Mode")
 
 st.markdown(
     f"""
 <div class="examora-exam">
   <div class="examora-title">Examora Exam</div>
-  <div class="examora-subtitle">Questions: {total} • Difficulty: {difficulty} • Pages: {sp}–{ep}</div>
+  <div class="examora-subtitle">Questions: {total} • Difficulty: {difficulty} • Pages: {sp}–{ep}{section_label}</div>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-# Grid navigation
 st.markdown("**Question Grid** (click to jump):")
 cols = st.columns(10)
 for i in range(total):
@@ -820,7 +1216,6 @@ for i in range(total):
 
 st.write("")
 
-# Current question
 idx = st.session_state.q_index
 q = questions[idx]
 qnum = idx + 1
@@ -843,7 +1238,6 @@ choice = st.radio(
 
 st.session_state.answers[qnum] = choice
 
-# Controls
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 
 with c1:
@@ -867,8 +1261,7 @@ with c3:
 with c4:
     submit_clicked = st.button("Submit Exam", disabled=st.session_state.submitted)
 
-# Study mode instant feedback
-if study_mode and not st.session_state.submitted and choice in ["A", "B", "C", "D"]:
+if study_mode_now and not st.session_state.submitted and choice in ["A", "B", "C", "D"]:
     if choice == q["answer"]:
         st.success("Correct")
     else:
@@ -880,7 +1273,6 @@ if submit_clicked:
     st.session_state.submitted = True
     st.rerun()
 
-# Results
 if st.session_state.submitted:
     st.divider()
     st.markdown(
@@ -934,7 +1326,8 @@ if st.session_state.submitted:
         "You are part of our beta group. Please report incorrect answers, unclear questions, "
         "or UI issues. Your feedback directly shapes the product."
     )
-    st.link_button("Submit Beta Feedback", FEEDBACK_URL)
+    feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, user_email)
+    st.link_button("Submit Beta Feedback", feedback_link)
 
     if st.button("Start New Exam"):
         reset_exam_state()
