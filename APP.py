@@ -1179,6 +1179,20 @@ with g1:
             }
             new_used = increment_exam_session(user_email, meta)
             st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
+            new_used = increment_exam_session(user_email, meta)
+
+st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
+
+st.markdown("""
+<script>
+gtag('event', 'exam_generated', {
+  'event_category': 'conversion',
+  'event_label': 'exam_created'
+});
+</script>
+""", unsafe_allow_html=True)
+
+st.rerun()
             st.rerun()
         else:
             st.warning("No questions returned. Try increasing page range or reducing difficulty.")
@@ -1349,4 +1363,5 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
