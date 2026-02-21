@@ -9,6 +9,11 @@ import io
 import csv
 import secrets
 import hashlib
+import requests
+import uuid
+
+GA_MEASUREMENT_ID = "G-GGZNKBCS1E"
+GA_API_SECRET = "YOUR_GA_API_SECRET"  # create in GA Admin
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -126,6 +131,30 @@ def build_prefilled_feedback_url(base_url: str, user_email: str) -> str:
 
     sep = "&" if "?" in base_url else "?"
     return f"{base_url}{sep}usp=pp_url&entry.{EMAIL_ENTRY_ID}={quote_plus(user_email)}"
+def send_ga_event(event_name, user_id):
+    if not GA_API_SECRET:
+        return  # do nothing if secret missing
+
+    url = (
+        f"https://www.google-analytics.com/mp/collect"
+        f"?measurement_id={GA_MEASUREMENT_ID}&api_secret={GA_API_SECRET}"
+    )
+
+    payload = {
+        "client_id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "events": [
+            {
+                "name": event_name,
+                "params": {}
+            }
+        ]
+    }
+
+    try:
+        requests.post(url, json=payload, timeout=2)
+    except Exception:
+        pass
 
 
 # -----------------------------
@@ -1379,3 +1408,4 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
