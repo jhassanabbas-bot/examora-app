@@ -1206,8 +1206,7 @@ if (typeof gtag === 'function') {
             st.warning("No questions returned. Try increasing page range or reducing difficulty.")
 
 st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
-
-        if mcq_set and mcq_set.get("questions"):
+    if mcq_set and mcq_set.get("questions"):
             questions = mcq_set["questions"]
             if shuffle_opts:
                 questions = [shuffle_question_options(q) for q in questions]
@@ -1413,6 +1412,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
