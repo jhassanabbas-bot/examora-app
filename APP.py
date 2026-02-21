@@ -1244,9 +1244,9 @@ gtag('event', 'exam_generated', {
             )
 
             st.rerun()
-
         else:
-            st.warning("No questions returned. Try increasing page range or reducing difficulty.")        else:
+            st.warning("No questions returned. Try increasing page range or reducing difficulty.")        
+        else:
             st.warning("No questions returned. Try increasing page range or reducing difficulty.")
 
 with g2:
@@ -1415,6 +1415,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
