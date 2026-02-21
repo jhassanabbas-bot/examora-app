@@ -1123,8 +1123,8 @@ if st.session_state.summary_open:
     )
     st.markdown(f"<div class='examora-card'>{st.session_state.summary_text}</div>", unsafe_allow_html=True)
     if st.button("Close Summary"):
-        st.session_state.summary_open = False
-        st.rerun()
+    st.session_state.summary_open = False
+    st.rerun()
 
 st.divider()
 
@@ -1407,6 +1407,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
