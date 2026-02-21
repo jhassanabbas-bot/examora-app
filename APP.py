@@ -1217,7 +1217,7 @@ with g1:
             }
 
             new_used = increment_exam_session(user_email, meta)
-
+            send_ga_event("exam_generated", user_email)
             # GA4 custom event (exam generated)
             components.html(
                 """
@@ -1408,4 +1408,5 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
