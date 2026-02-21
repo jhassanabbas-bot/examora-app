@@ -1,4 +1,5 @@
-# app.py — Examora (Beta) Streamlit MVP (clean, fixed indentation, GA4 event on exam generation)
+# app.py — Examora (Beta) Streamlit MVP
+# Clean version: fixed GA4 events, fixed download_button, removed duplicates, stable state + usage tracking
 
 import os
 import re
@@ -9,15 +10,12 @@ import io
 import csv
 import secrets
 import hashlib
-import requests
 import uuid
-
-GA_MEASUREMENT_ID = "G-GGZNKBCS1E"
-GA_API_SECRET = "YOUR_GA_API_SECRET"  # create in GA Admin
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
 
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from pypdf import PdfReader
@@ -27,48 +25,14 @@ from openai import AuthenticationError, RateLimitError, BadRequestError
 
 
 # ============================================================
-# Examora (Beta) — Streamlit MVP
-# - Local login/registration (hashed passwords)
-# - Usage dashboard (user + admin)
-# - PDF -> Summary + Exam (one question at a time)
-# - Beta limiter (sessions per email)
-# - Feedback button (Google Form) + local feedback fallback log
-# - Study type selector (3 buttons)
-# - Book mode: CUSTOM PAGE RANGE per chapter (NO autodetect in Beta)
-# - Forgot password reset (admin reset code for Beta)
-# - GA4: custom event "exam_generated" fired on Generate Exam
+# Streamlit config (MUST be first Streamlit call)
 # ============================================================
-
-
-# --- MUST be first Streamlit call ---
 st.set_page_config(page_title="Examora (Beta)", layout="wide")
 
-# -----------------------------
-# Google Analytics (GA4)
-# -----------------------------
-GA_MEASUREMENT_ID = "G-GGZNKBCS1E"
 
-st.markdown(
-    f"""
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){{dataLayer.push(arguments);}}
-      gtag('js', new Date());
-      gtag('config', '{GA_MEASUREMENT_ID}');
-    </script>
-    """,
-    unsafe_allow_html=True,
-)
-
-# --- Your Google Form link (base) ---
-FEEDBACK_URL = "https://docs.google.com/forms/d/e/1FAIpQLSc1n_uvwsnr1NpXiY_1SCg5_t_6MnsWVgG54z2NZHgVJOrkVw/viewform?usp=header"
-
-
-# -----------------------------
-# Env + OpenAI client
-# -----------------------------
+# ============================================================
+# ENV
+# ============================================================
 load_dotenv(dotenv_path=r".\.env", override=True)
 
 API_KEY = os.getenv("OPENAI_API_KEY") or ""
@@ -76,16 +40,40 @@ BETA_LIMIT = int(os.getenv("EXAMORA_BETA_LIMIT") or "20")
 
 ADMIN_EMAIL = (os.getenv("EXAMORA_ADMIN_EMAIL") or "").strip().lower()
 ADMIN_PASSWORD = os.getenv("EXAMORA_ADMIN_PASSWORD") or ""
-
-# Beta: simple reset code (admin shares manually)
 RESET_CODE = (os.getenv("EXAMORA_RESET_CODE") or "").strip()
+
+# GA4 Measurement Protocol
+GA_MEASUREMENT_ID = (os.getenv("GA4_MEASUREMENT_ID") or "G-GGZNKBCS1E").strip()
+GA_API_SECRET = (os.getenv("GA4_API_SECRET") or "").strip()
+
+# Your Google Form
+FEEDBACK_URL = "https://docs.google.com/forms/d/e/1FAIpQLSc1n_uvwsnr1NpXiY_1SCg5_t_6MnsWVgG54z2NZHgVJOrkVw/viewform?usp=header"
 
 client = OpenAI()  # reads OPENAI_API_KEY from environment
 
 
-# -----------------------------
+# ============================================================
+# Google Analytics (gtag.js) – page tag
+# ============================================================
+if GA_MEASUREMENT_ID:
+    st.markdown(
+        f"""
+        <!-- Google tag (gtag.js) -->
+        <script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
+        <script>
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){{dataLayer.push(arguments);}}
+          gtag('js', new Date());
+          gtag('config', '{GA_MEASUREMENT_ID}');
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
 # Local data store
-# -----------------------------
+# ============================================================
 DATA_DIR = Path(".examora")
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -94,9 +82,9 @@ USERS_FILE = DATA_DIR / "users.json"
 FEEDBACK_LOG_FILE = DATA_DIR / "feedback_log.json"
 
 
-# -----------------------------
+# ============================================================
 # Utilities
-# -----------------------------
+# ============================================================
 def now_ts() -> int:
     return int(time.time())
 
@@ -117,38 +105,53 @@ def looks_like_email(email: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
 
 
+def _seek0(file_obj):
+    try:
+        file_obj.seek(0)
+    except Exception:
+        pass
+
+
 def build_prefilled_feedback_url(base_url: str, user_email: str) -> str:
     """
-    OPTIONAL: Prefill an email field if your Google Form supports prefill query params.
-    This will NOT work unless you create a prefilled link in Google Forms and use the correct entry.<id>.
+    OPTIONAL: Prefill an email field if your Google Form supports it.
+    Requires EXAMORA_FEEDBACK_EMAIL_ENTRY_ID in .env.
     """
-    EMAIL_ENTRY_ID = os.getenv("EXAMORA_FEEDBACK_EMAIL_ENTRY_ID", "").strip()  # e.g., "1234567890"
-
+    EMAIL_ENTRY_ID = (os.getenv("EXAMORA_FEEDBACK_EMAIL_ENTRY_ID") or "").strip()
     if not user_email or not looks_like_email(user_email):
         return base_url
     if not EMAIL_ENTRY_ID:
         return base_url
-
     sep = "&" if "?" in base_url else "?"
     return f"{base_url}{sep}usp=pp_url&entry.{EMAIL_ENTRY_ID}={quote_plus(user_email)}"
-def send_ga_event(event_name, user_id):
-    if not GA_API_SECRET:
-        return  # do nothing if secret missing
+
+
+# ============================================================
+# GA4 Measurement Protocol event
+# ============================================================
+def send_ga_event(event_name: str, user_id: str, params: dict | None = None) -> None:
+    """
+    Sends a GA4 Measurement Protocol event.
+    Requires GA4_API_SECRET in .env.
+    Note: Measurement Protocol does NOT use your gtag.js cookie automatically.
+    """
+    if not GA_MEASUREMENT_ID or not GA_API_SECRET:
+        return
 
     url = (
-        f"https://www.google-analytics.com/mp/collect"
+        "https://www.google-analytics.com/mp/collect"
         f"?measurement_id={GA_MEASUREMENT_ID}&api_secret={GA_API_SECRET}"
     )
 
     payload = {
         "client_id": str(uuid.uuid4()),
-        "user_id": user_id,
+        "user_id": (user_id or ""),
         "events": [
             {
                 "name": event_name,
-                "params": {}
+                "params": params or {},
             }
-        ]
+        ],
     }
 
     try:
@@ -157,9 +160,9 @@ def send_ga_event(event_name, user_id):
         pass
 
 
-# -----------------------------
+# ============================================================
 # Safe file IO
-# -----------------------------
+# ============================================================
 def _read_json(path: Path, default):
     if not path.exists():
         return default
@@ -173,9 +176,9 @@ def _write_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-# -----------------------------
+# ============================================================
 # Feedback fallback log
-# -----------------------------
+# ============================================================
 def load_feedback_log() -> list:
     data = _read_json(FEEDBACK_LOG_FILE, [])
     return data if isinstance(data, list) else []
@@ -188,9 +191,9 @@ def append_feedback_log(item: dict) -> None:
     _write_json(FEEDBACK_LOG_FILE, log)
 
 
-# -----------------------------
-# Usage store (beta sessions, exam history)
-# -----------------------------
+# ============================================================
+# Usage store
+# ============================================================
 def load_usage() -> dict:
     return _read_json(USAGE_FILE, {})
 
@@ -202,7 +205,10 @@ def save_usage(data: dict) -> None:
 def get_user_usage(email: str) -> dict:
     email = normalize_email(email)
     usage = load_usage()
-    return usage.get(email, {"exam_sessions_used": 0, "created_at": None, "last_used_at": None, "history": []})
+    return usage.get(
+        email,
+        {"exam_sessions_used": 0, "created_at": None, "last_used_at": None, "history": []},
+    )
 
 
 def increment_exam_session(email: str, meta: dict) -> int:
@@ -240,9 +246,9 @@ def usage_to_csv_bytes(usage: dict) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
-# -----------------------------
+# ============================================================
 # Local users store (login)
-# -----------------------------
+# ============================================================
 PBKDF2_ITERS = 150_000
 
 
@@ -354,9 +360,9 @@ def get_role(email: str) -> str:
     return (users.get(email, {}).get("role") or "user").lower()
 
 
-# -----------------------------
+# ============================================================
 # OpenAI guardrails + safe call
-# -----------------------------
+# ============================================================
 def require_api_key():
     if not API_KEY:
         st.error("OPENAI_API_KEY not found. Ensure .env exists and contains OPENAI_API_KEY=sk-...")
@@ -377,16 +383,9 @@ def safe_call(fn, *args, **kwargs):
     return None
 
 
-# -----------------------------
+# ============================================================
 # PDF extraction
-# -----------------------------
-def _seek0(file_obj):
-    try:
-        file_obj.seek(0)
-    except Exception:
-        pass
-
-
+# ============================================================
 def extract_text_from_pdf_pages(file, start_page: int, end_page: int) -> tuple[str, int, int, int]:
     _seek0(file)
     reader = PdfReader(file)
@@ -410,9 +409,9 @@ def chunk_text(text: str, max_chars: int = 12000) -> list[str]:
     return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
-# -----------------------------
+# ============================================================
 # JSON parsing for MCQs
-# -----------------------------
+# ============================================================
 def _extract_json(text: str) -> dict:
     if not text:
         raise ValueError("Empty model output.")
@@ -434,9 +433,9 @@ def _difficulty_hint(level: str) -> str:
     return "Medium: conceptual understanding and typical exam-style reasoning."
 
 
-# -----------------------------
+# ============================================================
 # OpenAI calls
-# -----------------------------
+# ============================================================
 def summarize_text(text: str) -> str:
     chunks = chunk_text(text, max_chars=12000)
     if not chunks:
@@ -566,9 +565,9 @@ def build_results_csv(questions: list, answers: dict) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
-# -----------------------------
+# ============================================================
 # Session state
-# -----------------------------
+# ============================================================
 def init_state():
     st.session_state.setdefault("auth_email", "")
     st.session_state.setdefault("is_authed", False)
@@ -585,6 +584,7 @@ def init_state():
 
     # study mode
     st.session_state.setdefault("study_mode", "Single Document / TG Reports etc. (Default)")
+    st.session_state.setdefault("scope_mode", "Single Document/TG Reports etc.")
 
     # book navigation
     st.session_state.setdefault("book_start", 1)
@@ -598,9 +598,6 @@ def init_state():
 
     # quick split mode
     st.session_state.setdefault("quick_section_idx", 0)
-
-    # scope mode label (set later)
-    st.session_state.setdefault("scope_mode", "Single Document/TG Reports etc.")
 
 
 def reset_exam_state():
@@ -619,9 +616,9 @@ init_state()
 ensure_admin_user_exists()
 
 
-# -----------------------------
+# ============================================================
 # Styling
-# -----------------------------
+# ============================================================
 st.markdown(
     """
 <style>
@@ -653,12 +650,11 @@ div.stButton > button { border-radius: 12px !important; font-weight: 800 !import
 )
 
 
-# -----------------------------
+# ============================================================
 # Sidebar: Login / Register / Dashboard
-# -----------------------------
+# ============================================================
 st.sidebar.markdown("## Examora (Beta)")
 
-# DEBUG STAMP: proves which file is running + last modified
 try:
     this_file = os.path.abspath(__file__)
     mtime = datetime.fromtimestamp(os.path.getmtime(this_file)).strftime("%Y-%m-%d %H:%M:%S")
@@ -696,10 +692,7 @@ if auth_tab == "Login":
                 st.error("Passwords do not match.")
             else:
                 ok, msg = reset_password_with_code(fp_email, fp_code, fp_new1)
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+                st.success(msg) if ok else st.error(msg)
 
         if not RESET_CODE:
             st.warning("Admin: set EXAMORA_RESET_CODE in .env to enable resets.")
@@ -711,16 +704,14 @@ elif auth_tab == "Register":
     email = st.sidebar.text_input("Email", placeholder="name@example.com")
     password = st.sidebar.text_input("Password (min 8 chars)", type="password")
     password2 = st.sidebar.text_input("Confirm password", type="password")
+
     if st.sidebar.button("Create account"):
         email = normalize_email(email)
         if password != password2:
             st.sidebar.error("Passwords do not match.")
         else:
             ok, msg = register_user(email, password)
-            if ok:
-                st.sidebar.success(msg)
-            else:
-                st.sidebar.error(msg)
+            st.sidebar.success(msg) if ok else st.sidebar.error(msg)
 
     feedback_link = build_prefilled_feedback_url(FEEDBACK_URL, normalize_email(email))
     st.sidebar.link_button("Submit Beta Feedback", feedback_link)
@@ -769,9 +760,9 @@ elif auth_tab == "Dashboard":
                     )
 
 
-# -----------------------------
+# ============================================================
 # Main header
-# -----------------------------
+# ============================================================
 st.markdown("## Examora (Beta)")
 st.caption("Turn documents into mastery — summary → exam → results")
 
@@ -782,7 +773,7 @@ if not st.session_state.is_authed:
 user_email = st.session_state.auth_email
 role = get_role(user_email)
 
-# Always show a logout button
+# Always show logout
 st.sidebar.divider()
 if st.sidebar.button("Log out"):
     st.session_state.is_authed = False
@@ -792,7 +783,7 @@ if st.sidebar.button("Log out"):
     st.session_state.summary_text = ""
     st.rerun()
 
-# Dashboard page (main area)
+# Dashboard main page
 if auth_tab == "Dashboard":
     st.markdown("### Your Usage")
     u = get_user_usage(user_email)
@@ -814,9 +805,9 @@ if auth_tab == "Dashboard":
     st.stop()
 
 
-# -----------------------------
+# ============================================================
 # Upload + Study Type
-# -----------------------------
+# ============================================================
 st.divider()
 uploaded = st.file_uploader("Upload a text-based PDF", type=["pdf"])
 if not uploaded:
@@ -842,16 +833,14 @@ study_mode = st.radio(
     key="study_mode",
 )
 
+is_book_mode = study_mode.startswith("Book")
 if study_mode.startswith("Book (Autodetect)"):
-    st.info("🚧 **Book (Autodetect)** is **not available in Beta**. Use **Book (Chapter-by-chapter)**.")
-    is_book_mode = True
-else:
-    is_book_mode = study_mode.startswith("Book")
+    st.info("🚧 **Book (Autodetect)** is **not available in Beta**. Using **Chapter-by-chapter** instead.")
 
 
-# -----------------------------
-# BOOK MODE (NO autodetect): choose chapter pages directly
-# -----------------------------
+# ============================================================
+# BOOK MODE (choose chapter pages directly)
+# ============================================================
 start_page, end_page = 1, min(5, total_pages)
 section_label = ""
 section_title = ""
@@ -873,7 +862,6 @@ if is_book_mode:
         key="book_chapter_source",
     )
 
-    # --- Custom page range ---
     if chapter_source.startswith("Custom"):
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1:
@@ -883,7 +871,6 @@ if is_book_mode:
                 max_value=total_pages,
                 value=int(st.session_state.book_start),
                 step=1,
-                key="book_start_input",
             )
         with c2:
             end_page = st.number_input(
@@ -892,13 +879,11 @@ if is_book_mode:
                 max_value=total_pages,
                 value=int(st.session_state.book_end),
                 step=1,
-                key="book_end_input",
             )
         with c3:
             section_title = st.text_input(
                 "Chapter name (optional)",
                 value=st.session_state.book_title,
-                key="book_title_input",
             )
 
         a = int(start_page)
@@ -949,10 +934,8 @@ if is_book_mode:
 
         start_page, end_page = a, b
 
-    # --- Manual chapters list ---
     elif chapter_source.startswith("Manual"):
         st.warning("Define chapters using page ranges. Works for any book PDF.")
-
         default_example = "Chapter 1: 1-18\nChapter 2: 19-42\nChapter 3: 43-70\n"
         raw = st.text_area(
             "Enter chapters (one per line) as: Chapter Name: start-end",
@@ -1013,7 +996,6 @@ if is_book_mode:
                 st.session_state.summary_text = ""
                 st.rerun()
 
-    # --- Quick split ---
     else:
         st.info("Quick split is a fast fallback if you don’t want to type chapter ranges.")
         pages_per = st.number_input("Pages per chapter", min_value=5, max_value=50, value=20, step=5)
@@ -1068,9 +1050,9 @@ if is_book_mode:
     st.caption("Generate Summary/Exam for this chapter range. Then move to the next range/chapter.")
     st.info("📌 Examora reads **one chapter/range at a time** in Book Mode.")
 
-# -----------------------------
+# ============================================================
 # SINGLE DOCUMENT MODE
-# -----------------------------
+# ============================================================
 else:
     st.session_state.scope_mode = "Single Document/TG Reports etc."
     st.markdown("### Single Document / Report Mode")
@@ -1086,7 +1068,13 @@ else:
         with colA:
             start_page = st.number_input("Start page", min_value=1, max_value=max(1, total_pages), value=1, step=1)
         with colB:
-            end_page = st.number_input("End page", min_value=1, max_value=max(1, total_pages), value=min(5, total_pages), step=1)
+            end_page = st.number_input(
+                "End page",
+                min_value=1,
+                max_value=max(1, total_pages),
+                value=min(5, total_pages),
+                step=1,
+            )
 
     with st.spinner("Reading your selected material..."):
         text, _, sp, ep = extract_text_from_pdf_pages(uploaded, int(start_page), int(end_page))
@@ -1106,9 +1094,9 @@ else:
 st.caption("Tip: choose a focused chapter/section for best question quality.")
 
 
-# -----------------------------
+# ============================================================
 # Summary
-# -----------------------------
+# ============================================================
 a1, a2, a3 = st.columns([1, 1, 1])
 with a1:
     if st.button("Generate Summary"):
@@ -1147,11 +1135,7 @@ if st.session_state.summary_open:
 """,
         unsafe_allow_html=True,
     )
-
-    st.markdown(
-        f"<div class='examora-card'>{st.session_state.summary_text}</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div class='examora-card'>{st.session_state.summary_text}</div>", unsafe_allow_html=True)
 
     if st.button("Close Summary"):
         st.session_state.summary_open = False
@@ -1160,9 +1144,9 @@ if st.session_state.summary_open:
 st.divider()
 
 
-# -----------------------------
+# ============================================================
 # Exam controls
-# -----------------------------
+# ============================================================
 st.markdown("### Examora Exam Mode")
 st.caption("One question at a time • Flag • Jump via grid • Submit for results")
 
@@ -1191,12 +1175,7 @@ with g1:
         reset_exam_state()
 
         with st.spinner("Generating your Examora exam..."):
-            mcq_set = safe_call(
-                generate_mcqs_json,
-                text,
-                n_questions=n_questions,
-                difficulty=difficulty,
-            )
+            mcq_set = safe_call(generate_mcqs_json, text, n_questions=n_questions, difficulty=difficulty)
 
         if mcq_set and mcq_set.get("questions"):
             questions = mcq_set["questions"]
@@ -1209,7 +1188,7 @@ with g1:
             meta = {
                 "ts": now_ts(),
                 "pages": f"{sp}-{ep}",
-                "n_questions": n_questions,
+                "n_questions": int(n_questions),
                 "difficulty": difficulty,
                 "scope": st.session_state.scope_mode,
                 "section_title": (section_label.strip(" —") if section_label else ""),
@@ -1217,8 +1196,11 @@ with g1:
             }
 
             new_used = increment_exam_session(user_email, meta)
-            send_ga_event("exam_generated", user_email)
-            # GA4 custom event (exam generated)
+
+            # GA4 server-side event
+            send_ga_event("exam_generated", user_email, params={"pages": f"{sp}-{ep}", "difficulty": difficulty})
+
+            # Optional: fire client-side gtag event too
             components.html(
                 """
                 <script>
@@ -1251,9 +1233,9 @@ with g3:
     st.link_button("Submit Beta Feedback", feedback_link)
 
 
-# -----------------------------
+# ============================================================
 # Exam panel
-# -----------------------------
+# ============================================================
 if not st.session_state.exam_open or not st.session_state.questions:
     st.info("Click **Generate Exam** to start.")
     st.stop()
@@ -1347,7 +1329,7 @@ if study_mode_now and not st.session_state.submitted and choice in ["A", "B", "C
 
 if submit_clicked:
     st.session_state.submitted = True
-    send_ga_event("exam_submitted", user_email)
+    send_ga_event("exam_submitted", user_email, params={"pages": f"{sp}-{ep}", "difficulty": difficulty})
     st.rerun()
 
 if st.session_state.submitted:
@@ -1390,12 +1372,17 @@ if st.session_state.submitted:
         st.write("")
 
     csv_bytes = build_results_csv(questions, st.session_state.answers)
-    if st.download_button(
-        send_ga_event("results_downloaded", user_email)
+
+    # FIXED: proper download button + GA event using on_click
+    def _on_results_download():
+        send_ga_event("results_downloaded", user_email, params={"pages": f"{sp}-{ep}", "difficulty": difficulty})
+
+    st.download_button(
         "Download Results (CSV)",
         data=csv_bytes,
         file_name="examora_results.csv",
         mime="text/csv",
+        on_click=_on_results_download,
     )
 
     st.divider()
@@ -1410,6 +1397,3 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
-
-
-
