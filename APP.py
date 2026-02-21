@@ -1211,7 +1211,6 @@ gtag('event', 'exam_generated', {
 """, unsafe_allow_html=True)
 
 st.rerun()
-            st.rerun()
         else:
             st.warning("No questions returned. Try increasing page range or reducing difficulty.")
 
@@ -1381,6 +1380,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
