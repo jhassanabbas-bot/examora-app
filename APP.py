@@ -1156,8 +1156,14 @@ with g1:
             st.stop()
 
         reset_exam_state()
+
         with st.spinner("Generating your Examora exam..."):
-            mcq_set = safe_call(generate_mcqs_json, text, n_questions=n_questions, difficulty=difficulty)
+            mcq_set = safe_call(
+                generate_mcqs_json,
+                text,
+                n_questions=n_questions,
+                difficulty=difficulty,
+            )
 
         if mcq_set and mcq_set.get("questions"):
             questions = mcq_set["questions"]
@@ -1177,19 +1183,19 @@ with g1:
                 "pdf_name": getattr(uploaded, "name", ""),
             }
 
-            # increment ONCE
             new_used = increment_exam_session(user_email, meta)
-
             st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
 
-            # GA4 event
+            # GA4 event (fires after exam is generated)
             st.markdown(
                 """
 <script>
-gtag('event', 'exam_generated', {
-  'event_category': 'conversion',
-  'event_label': 'exam_created'
-});
+if (typeof gtag === 'function') {
+  gtag('event', 'exam_generated', {
+    'event_category': 'conversion',
+    'event_label': 'exam_created'
+  });
+}
 </script>
 """,
                 unsafe_allow_html=True,
@@ -1407,6 +1413,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
