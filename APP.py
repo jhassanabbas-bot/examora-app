@@ -1221,11 +1221,8 @@ if shuffle_opts:
                 "section_title": (section_label.strip(" —") if section_label else ""),
                 "pdf_name": getattr(uploaded, "name", ""),
             }
-
-            new_used = increment_exam_session(user_email, meta)
-
-            st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
-
+    new_used = increment_exam_session(user_email, meta)
+    st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
             st.markdown(
                 """
 <script>
@@ -1410,6 +1407,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
