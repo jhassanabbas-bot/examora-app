@@ -32,7 +32,24 @@ from openai import AuthenticationError, RateLimitError, BadRequestError
 
 # --- MUST be first Streamlit call ---
 st.set_page_config(page_title="Examora (Beta)", layout="wide")
+# -----------------------------
+# Google Analytics (GA4)
+# -----------------------------
+GA_MEASUREMENT_ID = "G-GGZNKBCS1E"
 
+st.markdown(
+    f"""
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_MEASUREMENT_ID}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{GA_MEASUREMENT_ID}');
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
 # --- Your Google Form link (base) ---
 FEEDBACK_URL = "https://docs.google.com/forms/d/e/1FAIpQLSc1n_uvwsnr1NpXiY_1SCg5_t_6MnsWVgG54z2NZHgVJOrkVw/viewform?usp=header"
 
@@ -1332,3 +1349,4 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
