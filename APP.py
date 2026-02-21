@@ -1210,11 +1210,9 @@ if mcq_set and mcq_set.get("questions"):
     questions = mcq_set["questions"]
 if shuffle_opts:
     questions = [shuffle_question_options(q) for q in questions]
-
-            st.session_state.questions = questions
-            st.session_state.exam_open = True
-
-            meta = {
+    st.session_state.questions = questions
+    st.session_state.exam_open = True
+    meta = {
                 "ts": now_ts(),
                 "pages": f"{sp}-{ep}",
                 "n_questions": n_questions,
@@ -1412,6 +1410,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
