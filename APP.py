@@ -1143,7 +1143,6 @@ with right:
     mode = st.selectbox("Mode", ["Exam Mode (feedback on submit)", "Study Mode (instant feedback)"], index=0)
 
 g1, g2, g3 = st.columns([1, 1, 2])
-
 with g1:
     if st.button("Generate Exam"):
         require_api_key()
@@ -1177,9 +1176,28 @@ with g1:
                 "section_title": (section_label.strip(" —") if section_label else ""),
                 "pdf_name": getattr(uploaded, "name", ""),
             }
+
+            # increment ONCE
             new_used = increment_exam_session(user_email, meta)
+
             st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
-            new_used = increment_exam_session(user_email, meta)
+
+            # GA4 event
+            st.markdown(
+                """
+<script>
+gtag('event', 'exam_generated', {
+  'event_category': 'conversion',
+  'event_label': 'exam_created'
+});
+</script>
+""",
+                unsafe_allow_html=True,
+            )
+
+            st.rerun()
+        else:
+            st.warning("No questions returned. Try increasing page range or reducing difficulty.")
 
 st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
 
@@ -1363,5 +1381,6 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
