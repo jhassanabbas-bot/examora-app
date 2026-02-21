@@ -1201,17 +1201,44 @@ gtag('event', 'exam_generated', {
 
 st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
 
-st.markdown("""
+        if mcq_set and mcq_set.get("questions"):
+            questions = mcq_set["questions"]
+            if shuffle_opts:
+                questions = [shuffle_question_options(q) for q in questions]
+
+            st.session_state.questions = questions
+            st.session_state.exam_open = True
+
+            meta = {
+                "ts": now_ts(),
+                "pages": f"{sp}-{ep}",
+                "n_questions": n_questions,
+                "difficulty": difficulty,
+                "scope": st.session_state.scope_mode,
+                "section_title": (section_label.strip(" —") if section_label else ""),
+                "pdf_name": getattr(uploaded, "name", ""),
+            }
+
+            new_used = increment_exam_session(user_email, meta)
+
+            st.success(f"Exam generated. Session used: {new_used}/{BETA_LIMIT}")
+
+            st.markdown(
+                """
 <script>
 gtag('event', 'exam_generated', {
   'event_category': 'conversion',
   'event_label': 'exam_created'
 });
 </script>
-""", unsafe_allow_html=True)
+""",
+                unsafe_allow_html=True,
+            )
 
-st.rerun()
+            st.rerun()
+
         else:
+            st.warning("No questions returned. Try increasing page range or reducing difficulty.")        else:
             st.warning("No questions returned. Try increasing page range or reducing difficulty.")
 
 with g2:
@@ -1380,6 +1407,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
