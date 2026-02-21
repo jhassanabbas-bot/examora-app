@@ -1108,7 +1108,11 @@ with st.expander("Having issues with the Google feedback form? Leave feedback he
         if not (fb_note or "").strip():
             st.warning("Please type feedback first.")
         else:
-            append_feedback_log({"ts": now_ts(), "email": user_email, "note": fb_note.strip()})
+            append_feedback_log({
+                "ts": now_ts(),
+                "email": user_email,
+                "note": fb_note.strip()
+            })
             st.success("Saved locally. Thank you!")
 
 if st.session_state.summary_open:
@@ -1121,13 +1125,17 @@ if st.session_state.summary_open:
 """,
         unsafe_allow_html=True,
     )
-    st.markdown(f"<div class='examora-card'>{st.session_state.summary_text}</div>", unsafe_allow_html=True)
-        if st.button("Close Summary"):
-            st.session_state.summary_open = False
-            st.rerun()
+
+    st.markdown(
+        f"<div class='examora-card'>{st.session_state.summary_text}</div>",
+        unsafe_allow_html=True
+    )
+
+    if st.button("Close Summary"):
+        st.session_state.summary_open = False
+        st.rerun()
 
 st.divider()
-
 # -----------------------------
 # Exam controls
 # -----------------------------
@@ -1407,6 +1415,7 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
 
