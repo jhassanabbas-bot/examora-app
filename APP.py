@@ -1347,6 +1347,7 @@ if study_mode_now and not st.session_state.submitted and choice in ["A", "B", "C
 
 if submit_clicked:
     st.session_state.submitted = True
+    send_ga_event("exam_submitted", user_email)
     st.rerun()
 
 if st.session_state.submitted:
@@ -1389,7 +1390,8 @@ if st.session_state.submitted:
         st.write("")
 
     csv_bytes = build_results_csv(questions, st.session_state.answers)
-    st.download_button(
+    if st.download_button(
+        send_ga_event("results_downloaded", user_email)
         "Download Results (CSV)",
         data=csv_bytes,
         file_name="examora_results.csv",
@@ -1408,5 +1410,6 @@ if st.session_state.submitted:
     if st.button("Start New Exam"):
         reset_exam_state()
         st.rerun()
+
 
 
