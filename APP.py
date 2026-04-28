@@ -1456,6 +1456,7 @@ with s_col1:
             used = get_user_usage(user_email).get("exam_sessions_used", 0)
             st.error(f"Beta limit reached ({used}/{BETA_LIMIT}). Contact us for full access.")
             st.stop()
+        th = get_text_hash(text)
         # Show section-by-section progress for multi-chunk docs
         if doc_size != "short":
             progress_bar = st.progress(0, text="Starting summarisation...")
