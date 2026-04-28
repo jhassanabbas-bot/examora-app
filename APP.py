@@ -360,6 +360,16 @@ def reset_password_with_code(email: str, code: str, new_pw: str) -> tuple[bool, 
 def get_role(email: str) -> str:
     return (load_users().get(normalize_email(email), {}).get("role") or "user").lower()
 
+def is_admin(email: str) -> bool:
+    return get_role(email) == "admin"
+
+def at_limit(email: str) -> bool:
+    """Returns True only if user has hit the beta limit AND is not admin."""
+    if is_admin(email):
+        return False
+    used = get_user_usage(email).get("exam_sessions_used", 0)
+    return used >= BETA_LIMIT
+
 
 # ============================================================
 # OpenAI helpers
@@ -956,7 +966,10 @@ elif auth_tab == "Dashboard":
         st.sidebar.markdown(f"**{de}**")
         st.sidebar.markdown(f"Role: `{dr}`")
         used = du.get("exam_sessions_used", 0)
-        st.sidebar.progress(used / BETA_LIMIT, text=f"{used}/{BETA_LIMIT} sessions used")
+        if is_admin(de):
+            st.sidebar.caption(f"✅ Admin — {used} sessions used (unlimited)")
+        else:
+            st.sidebar.progress(used / BETA_LIMIT, text=f"{used}/{BETA_LIMIT} sessions used")
         if st.sidebar.button("Log out", use_container_width=True, key="sidebar_logout_dash"):
             st.session_state.is_authed           = False
             st.session_state.auth_email          = ""
@@ -978,6 +991,48 @@ elif auth_tab == "Dashboard":
             st.sidebar.caption(f"Feedback entries: {len(fb)}")
             for row in fb[-5:][::-1]:
                 st.sidebar.write(f"- {ts_to_str(row.get('ts',0))} · {row.get('note','')[:40]}")
+
+            st.sidebar.divider()
+            st.sidebar.markdown("### 👤 Upgrade User Plan")
+            st.sidebar.caption("Manually upgrade a user after they pay.")
+            upgrade_email = st.sidebar.text_input(
+                "User email", placeholder="user@example.com", key="upgrade_email")
+            upgrade_plan = st.sidebar.selectbox(
+                "Plan", ["subscriber (100 sessions/month)", "free_trial (20 sessions)"],
+                key="upgrade_plan")
+            upgrade_sessions = st.sidebar.number_input(
+                "Set session count to", min_value=0, max_value=10000,
+                value=0, step=1, key="upgrade_sessions",
+                help="Resets their used session count to this number (usually 0 for new subscribers)")
+
+            if st.sidebar.button("✅ Apply Upgrade", use_container_width=True):
+                ue = normalize_email(upgrade_email)
+                if not looks_like_email(ue):
+                    st.sidebar.error("Please enter a valid email.")
+                else:
+                    users  = load_users()
+                    usage  = load_usage()
+                    if ue not in users:
+                        st.sidebar.error(f"No account found for {ue}. They must register first.")
+                    else:
+                        # Update role/plan
+                        plan_key = "subscriber" if upgrade_plan.startswith("subscriber") else "free_trial"
+                        users[ue]["plan"] = plan_key
+                        save_users(users)
+
+                        # Reset/set session count
+                        if ue not in usage:
+                            usage[ue] = {"exam_sessions_used": 0, "created_at": now_ts(),
+                                         "last_used_at": None, "history": []}
+                        usage[ue]["exam_sessions_used"] = int(upgrade_sessions)
+                        usage[ue]["plan"] = plan_key
+                        usage[ue]["plan_updated_at"] = now_ts()
+                        save_usage(usage)
+
+                        plan_limit = "100 sessions/month" if plan_key == "subscriber" else "20 sessions"
+                        st.sidebar.success(
+                            f"✅ {ue} upgraded to **{plan_key}** ({plan_limit}). "
+                            f"Session count set to {int(upgrade_sessions)}.")
 
 
 # ============================================================
@@ -1014,7 +1069,9 @@ if auth_tab == "Dashboard":
     hist = u.get("history", []) or []
     st.markdown('<div class="ex-section-label">Your Dashboard</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
-    c1.metric("Sessions used",  f"{u.get('exam_sessions_used',0)} / {BETA_LIMIT}")
+    c1.metric("Sessions used",
+              f"{u.get('exam_sessions_used',0)} (unlimited)" if is_admin(user_email)
+              else f"{u.get('exam_sessions_used',0)} / {BETA_LIMIT}")
     c2.metric("First seen",     ts_to_str(u.get("created_at") or 0) if u.get("created_at") else "—")
     c3.metric("Last active",    ts_to_str(u.get("last_used_at") or 0) if u.get("last_used_at") else "—")
     if hist:
@@ -1395,12 +1452,10 @@ s_col1, s_col2, s_col3 = st.columns([1, 1, 2])
 with s_col1:
     if st.button("📋 Generate Summary", type="primary", use_container_width=True):
         require_api_key()
-        used = get_user_usage(user_email).get("exam_sessions_used", 0)
-        if used >= BETA_LIMIT:
+        if at_limit(user_email):
+            used = get_user_usage(user_email).get("exam_sessions_used", 0)
             st.error(f"Beta limit reached ({used}/{BETA_LIMIT}). Contact us for full access.")
             st.stop()
-
-        th = get_text_hash(text)
         # Show section-by-section progress for multi-chunk docs
         if doc_size != "short":
             progress_bar = st.progress(0, text="Starting summarisation...")
@@ -1528,8 +1583,8 @@ g1, g2, g3 = st.columns([1, 1, 2])
 with g1:
     if st.button("🎯 Generate Exam", type="primary", use_container_width=True):
         require_api_key()
-        used = get_user_usage(user_email).get("exam_sessions_used", 0)
-        if used >= BETA_LIMIT:
+        if at_limit(user_email):
+            used = get_user_usage(user_email).get("exam_sessions_used", 0)
             st.error(f"Beta limit reached ({used}/{BETA_LIMIT}). Contact us for full access.")
             st.stop()
         reset_exam_state()
