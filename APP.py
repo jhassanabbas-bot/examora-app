@@ -1006,6 +1006,19 @@ div.stButton > button[kind="primary"] {
   .r-q   { font-size: 13px !important; }
   .r-ans { font-size: 12px !important; }
 
+  /* Question grid buttons — compact and horizontal */
+  div[data-testid="stHorizontalBlock"] div.stButton > button {
+    min-height: 40px !important;
+    font-size: 13px !important;
+    padding: 4px 2px !important;
+    width: 100% !important;
+  }
+
+  /* Tighter columns gap on mobile */
+  div[data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+  }
+
   /* Buttons — bigger touch targets on mobile */
   div.stButton > button {
     min-height: 48px !important;
@@ -1811,14 +1824,17 @@ st.progress(answered_count / total if total else 0,
             text=f"Progress: {answered_count} / {total} questions answered")
 
 st.markdown("**Jump to question:**")
-# 5 columns max — works on both mobile (390px) and desktop
-grid_cols = st.columns(min(total, 5))
+# 4 columns — fits comfortably on all phone screens (390px+)
+n_grid_cols = min(total, 4)
+grid_cols = st.columns(n_grid_cols)
 for i in range(total):
     qn         = i + 1
     ans_ok     = st.session_state.answers.get(qn) in ["A","B","C","D"]
     is_flagged = qn in st.session_state.flagged
-    lbl        = str(qn) + (" ⚑" if is_flagged else "") + (" ✓" if ans_ok else "")
-    if grid_cols[i % 5].button(lbl, key=f"grid_{qn}", disabled=st.session_state.submitted):
+    # Keep labels short on mobile — just number + symbol
+    lbl = str(qn) + ("⚑" if is_flagged else "") + ("✓" if ans_ok else "")
+    if grid_cols[i % n_grid_cols].button(
+            lbl, key=f"grid_{qn}", disabled=st.session_state.submitted):
         st.session_state.q_index = i; st.rerun()
 
 st.write("")
