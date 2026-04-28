@@ -819,82 +819,239 @@ ga_init()
 
 
 # ============================================================
-# Global CSS
+# Global CSS — desktop + mobile responsive
 # ============================================================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; }
 
+/* ── Base layout ── */
+.block-container {
+  padding-top: 1rem !important;
+  padding-bottom: 3rem !important;
+  padding-left: 1.5rem !important;
+  padding-right: 1.5rem !important;
+}
+
+/* ── Hero ── */
 .ex-hero {
   background: linear-gradient(135deg, #1a3a6b 0%, #2563eb 100%);
-  border-radius: 16px; padding: 28px 36px 22px 36px;
-  margin-bottom: 20px; color: #fff;
+  border-radius: 16px;
+  padding: 28px 36px 22px 36px;
+  margin-bottom: 20px;
+  color: #fff;
 }
 .ex-hero-badge {
-  display:inline-block; background:rgba(255,255,255,0.18);
-  border:1px solid rgba(255,255,255,0.3); border-radius:20px;
-  padding:3px 12px; font-size:12px; font-weight:600; color:#fff; margin-bottom:10px;
+  display: inline-block;
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: 12px; font-weight: 600; color: #fff;
+  margin-bottom: 10px;
 }
-.ex-hero-title { font-size:2rem; font-weight:900; color:#fff !important; margin:0 0 4px 0; letter-spacing:-0.5px; }
-.ex-hero-sub   { color:rgba(255,255,255,0.78); font-size:15px; margin:0; }
+.ex-hero-title {
+  font-size: 2rem; font-weight: 900;
+  color: #fff !important; margin: 0 0 4px 0; letter-spacing: -0.5px;
+}
+.ex-hero-sub { color: rgba(255,255,255,0.78); font-size: 15px; margin: 0; }
 
+/* ── Labels / status ── */
 .ex-section-label {
-  font-size:11px; font-weight:700; letter-spacing:1px;
-  text-transform:uppercase; color:#6b7280; margin:24px 0 8px 0;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; color: #6b7280; margin: 24px 0 8px 0;
 }
 .ex-status {
-  background:#f0f7ff; border:1px solid #bfdbfe;
-  border-left:4px solid #2563eb; border-radius:10px;
-  padding:10px 16px; font-size:14px; margin-bottom:14px; color:#1e3a5f;
+  background: #f0f7ff; border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb; border-radius: 10px;
+  padding: 10px 16px; font-size: 14px; margin-bottom: 14px; color: #1e3a5f;
 }
 .ex-status-long {
-  background:#fefce8; border:1px solid #fde68a;
-  border-left:4px solid #f59e0b; border-radius:10px;
-  padding:10px 16px; font-size:14px; margin-bottom:14px; color:#78350f;
+  background: #fefce8; border: 1px solid #fde68a;
+  border-left: 4px solid #f59e0b; border-radius: 10px;
+  padding: 10px 16px; font-size: 14px; margin-bottom: 14px; color: #78350f;
 }
 .bookmark-banner {
-  background:#fffbeb; border:1px solid #fcd34d;
-  border-left:4px solid #f59e0b; border-radius:10px;
-  padding:10px 16px; font-size:14px; margin-bottom:14px; color:#78350f;
+  background: #fffbeb; border: 1px solid #fcd34d;
+  border-left: 4px solid #f59e0b; border-radius: 10px;
+  padding: 10px 16px; font-size: 14px; margin-bottom: 14px; color: #78350f;
 }
 
-/* Summary */
-.sum-wrap { border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; margin-bottom:20px; box-shadow:0 4px 20px rgba(0,0,0,0.07); }
-.sum-header { background:linear-gradient(135deg,#1a3a6b,#2563eb); padding:18px 24px 14px 24px; }
-.sum-header-title { font-size:1.15rem; font-weight:900; color:#fff !important; margin:0 0 2px 0; }
-.sum-header-sub   { font-size:12px; color:rgba(255,255,255,0.75); margin:0; }
-.sum-section { padding:16px 24px 8px 24px; border-bottom:1px solid #f3f4f6; background:#fff; }
-.sum-section:last-child { border-bottom:none; }
-.sum-section-title { font-size:13px; font-weight:800; color:#1a3a6b; margin-bottom:10px; }
-.sum-footer { background:#f9fafb; padding:12px 24px; border-top:1px solid #f3f4f6; }
+/* ── Mobile login hint ── */
+.mobile-login-hint {
+  display: none;
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 10px; padding: 12px 16px;
+  font-size: 14px; color: #1e3a5f;
+  text-align: center; margin-bottom: 16px;
+}
 
-/* Exam */
-.exam-wrap { border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; margin-bottom:20px; box-shadow:0 4px 20px rgba(0,0,0,0.07); }
-.exam-header { background:linear-gradient(135deg,#1a3a6b,#2563eb); padding:18px 24px 14px 24px; }
-.exam-header-title { font-size:1.15rem; font-weight:900; color:#fff !important; margin:0 0 2px 0; }
-.exam-header-sub   { font-size:12px; color:rgba(255,255,255,0.75); margin:0; }
-.q-card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px 14px 22px; margin-bottom:14px; }
-.q-meta { font-size:11px; font-weight:700; color:#2563eb; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; }
-.q-text { font-size:16px; font-weight:600; color:#111827; line-height:1.55; }
+/* ── Summary ── */
+.sum-wrap {
+  border: 1px solid #e5e7eb; border-radius: 14px;
+  overflow: hidden; margin-bottom: 20px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.07);
+}
+.sum-header {
+  background: linear-gradient(135deg, #1a3a6b, #2563eb);
+  padding: 18px 24px 14px 24px;
+}
+.sum-header-title { font-size: 1.15rem; font-weight: 900; color: #fff !important; margin: 0 0 2px 0; }
+.sum-header-sub   { font-size: 12px; color: rgba(255,255,255,0.75); margin: 0; }
+.sum-section {
+  padding: 16px 24px 8px 24px;
+  border-bottom: 1px solid #f3f4f6; background: #fff;
+}
+.sum-section:last-child { border-bottom: none; }
+.sum-section-title { font-size: 13px; font-weight: 800; color: #1a3a6b; margin-bottom: 10px; }
+.sum-footer { background: #f9fafb; padding: 12px 24px; border-top: 1px solid #f3f4f6; }
 
-/* Results */
-.score-pass { background:linear-gradient(135deg,#065f46,#10b981); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
-.score-warn { background:linear-gradient(135deg,#92400e,#f59e0b); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
-.score-fail { background:linear-gradient(135deg,#7f1d1d,#ef4444); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
-.score-pct  { font-size:3.5rem; font-weight:900; line-height:1; }
-.score-msg  { font-size:14px; opacity:0.88; margin-top:6px; }
+/* ── Exam ── */
+.exam-wrap {
+  border: 1px solid #e5e7eb; border-radius: 14px;
+  overflow: hidden; margin-bottom: 20px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.07);
+}
+.exam-header {
+  background: linear-gradient(135deg, #1a3a6b, #2563eb);
+  padding: 18px 24px 14px 24px;
+}
+.exam-header-title { font-size: 1.15rem; font-weight: 900; color: #fff !important; margin: 0 0 2px 0; }
+.exam-header-sub   { font-size: 12px; color: rgba(255,255,255,0.75); margin: 0; }
+
+.q-card {
+  background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 12px; padding: 18px 22px 14px 22px; margin-bottom: 14px;
+}
+.q-meta { font-size: 11px; font-weight: 700; color: #2563eb; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+.q-text { font-size: 16px; font-weight: 600; color: #111827; line-height: 1.55; }
+
+/* ── Results ── */
+.score-pass { background: linear-gradient(135deg,#065f46,#10b981); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
+.score-warn { background: linear-gradient(135deg,#92400e,#f59e0b); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
+.score-fail { background: linear-gradient(135deg,#7f1d1d,#ef4444); color:#fff; border-radius:12px; padding:22px 28px; text-align:center; margin-bottom:18px; }
+.score-pct  { font-size: 3.5rem; font-weight: 900; line-height: 1; }
+.score-msg  { font-size: 14px; opacity: 0.88; margin-top: 6px; }
 .r-correct   { background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:14px 18px; margin-bottom:8px; }
 .r-incorrect { background:#fef2f2; border:1px solid #fca5a5; border-radius:10px; padding:14px 18px; margin-bottom:8px; }
-.r-q   { font-size:14px; font-weight:600; color:#111827; margin-bottom:5px; }
-.r-ans { font-size:13px; color:#374151; margin-bottom:3px; }
-.r-exp { font-size:12px; color:#6b7280; margin-top:6px; font-style:italic; }
+.r-q   { font-size: 14px; font-weight: 600; color: #111827; margin-bottom: 5px; }
+.r-ans { font-size: 13px; color: #374151; margin-bottom: 3px; }
+.r-exp { font-size: 12px; color: #6b7280; margin-top: 6px; font-style: italic; }
 
-/* Buttons */
-div.stButton > button { border-radius:9px !important; font-weight:700 !important; font-size:14px !important; }
+/* ── Buttons — desktop ── */
+div.stButton > button {
+  border-radius: 9px !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  min-height: 42px !important;
+}
 div.stButton > button[kind="primary"] {
-  background:linear-gradient(135deg,#1a3a6b,#2563eb) !important; border:none !important; color:#fff !important;
+  background: linear-gradient(135deg,#1a3a6b,#2563eb) !important;
+  border: none !important; color: #fff !important;
+}
+
+/* ══════════════════════════════════════════════
+   MOBILE STYLES — only apply below 640px
+   Zero effect on tablet / laptop / desktop
+   ══════════════════════════════════════════════ */
+@media (max-width: 640px) {
+
+  /* Tighter page padding on small screens */
+  .block-container {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+    padding-top: 0.5rem !important;
+  }
+
+  /* Hero — smaller text and padding */
+  .ex-hero {
+    padding: 18px 18px 16px 18px;
+    border-radius: 12px;
+  }
+  .ex-hero-title { font-size: 1.4rem !important; }
+  .ex-hero-sub   { font-size: 13px !important; }
+
+  /* Section labels */
+  .ex-section-label { margin: 16px 0 6px 0; }
+
+  /* Status cards — smaller text */
+  .ex-status, .ex-status-long, .bookmark-banner {
+    font-size: 13px !important;
+    padding: 8px 12px !important;
+  }
+
+  /* Show the mobile login hint */
+  .mobile-login-hint { display: block; }
+
+  /* Summary — reduce padding on mobile */
+  .sum-header { padding: 14px 16px 10px 16px; }
+  .sum-header-title { font-size: 1rem !important; }
+  .sum-section { padding: 12px 16px 6px 16px; }
+
+  /* Exam header — tighter */
+  .exam-header { padding: 14px 16px 10px 16px; }
+  .exam-header-title { font-size: 1rem !important; }
+  .exam-header-sub   { font-size: 11px !important; }
+
+  /* Question card — bigger text for readability */
+  .q-card { padding: 14px 14px 10px 14px; }
+  .q-text { font-size: 15px !important; line-height: 1.5 !important; }
+  .q-meta { font-size: 10px !important; }
+
+  /* Results score — smaller pct on narrow screen */
+  .score-pct { font-size: 2.5rem !important; }
+  .score-pass, .score-warn, .score-fail { padding: 16px 16px; }
+  .r-correct, .r-incorrect { padding: 10px 12px; }
+  .r-q   { font-size: 13px !important; }
+  .r-ans { font-size: 12px !important; }
+
+  /* Buttons — bigger touch targets on mobile */
+  div.stButton > button {
+    min-height: 48px !important;
+    font-size: 15px !important;
+    width: 100% !important;
+  }
+
+  /* Radio options — more spacing for fat fingers */
+  div[data-testid="stRadio"] label {
+    padding: 10px 8px !important;
+    font-size: 15px !important;
+    line-height: 1.5 !important;
+  }
+
+  /* Sliders — bigger handle */
+  div[data-testid="stSlider"] {
+    padding: 8px 0 !important;
+  }
+
+  /* Selectbox — taller */
+  div[data-testid="stSelectbox"] > div {
+    min-height: 44px !important;
+  }
+
+  /* Progress bar text */
+  div[data-testid="stProgress"] p {
+    font-size: 12px !important;
+  }
+
+  /* Metric cards on dashboard */
+  div[data-testid="stMetric"] {
+    padding: 10px 8px !important;
+  }
+  div[data-testid="stMetricValue"] {
+    font-size: 1.1rem !important;
+  }
+
+  /* Expanders — more breathing room */
+  div[data-testid="stExpander"] {
+    margin-bottom: 8px !important;
+  }
+
+  /* Caption text */
+  div[data-testid="stCaptionContainer"] p {
+    font-size: 12px !important;
+  }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1051,6 +1208,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if not user_authed:
+    st.markdown("""
+<div class="mobile-login-hint">
+  👆 Tap the <strong>≡</strong> menu (top left) to Login or Register
+</div>
+""", unsafe_allow_html=True)
     st.info("👈 Please **Login** in the sidebar to use Examora.")
     st.stop()
 
@@ -1649,13 +1811,14 @@ st.progress(answered_count / total if total else 0,
             text=f"Progress: {answered_count} / {total} questions answered")
 
 st.markdown("**Jump to question:**")
-grid_cols = st.columns(min(total, 10))
+# 5 columns max — works on both mobile (390px) and desktop
+grid_cols = st.columns(min(total, 5))
 for i in range(total):
     qn         = i + 1
     ans_ok     = st.session_state.answers.get(qn) in ["A","B","C","D"]
     is_flagged = qn in st.session_state.flagged
     lbl        = str(qn) + (" ⚑" if is_flagged else "") + (" ✓" if ans_ok else "")
-    if grid_cols[i % 10].button(lbl, key=f"grid_{qn}", disabled=st.session_state.submitted):
+    if grid_cols[i % 5].button(lbl, key=f"grid_{qn}", disabled=st.session_state.submitted):
         st.session_state.q_index = i; st.rerun()
 
 st.write("")
@@ -1692,7 +1855,7 @@ if study_mode_now and not st.session_state.submitted and choice in ["A","B","C",
     if q.get("explanation"):
         st.info(f"💡 {q['explanation']}")
 
-n1, n2, n3, n4, n5 = st.columns([1, 1, 1, 2, 1])
+n1, n2, n3, n4 = st.columns([1, 1, 1, 2])
 with n1:
     if st.button("⚑ Flag", disabled=st.session_state.submitted):
         if qnum in st.session_state.flagged:
@@ -1709,8 +1872,6 @@ with n3:
 with n4:
     submit_clicked = st.button("✅ Submit Exam", type="primary",
                                disabled=st.session_state.submitted, use_container_width=True)
-with n5:
-    st.write("")
 
 if st.session_state.flagged:
     st.caption(f"⚑ Flagged: {', '.join(map(str, sorted(st.session_state.flagged)))}")
