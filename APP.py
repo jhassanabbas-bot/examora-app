@@ -8,12 +8,14 @@
 # 5. Speed optimisations — gpt-4o-mini, smaller input budgets, dynamic max_tokens
 # 6. Professional in-page UI — gradient headers, styled cards, score banners
 # 7. GA4 client-side events (Streamlit-safe, deduplicated)
-# 8. ADAPTIVE SUMMARISATION (this update)
-#    - Short  (<40,000 chars  ≈ <50 pages):  single call, concise summary
-#    - Medium (40k–120k chars ≈ 50–150 pages): 3-chunk map-reduce
-#    - Long   (>120,000 chars ≈ 150+ pages):  5-chunk map-reduce + overview paragraph
-#    - User sees progress during multi-chunk summarisation
-#    - BOOK_PAGE_THRESHOLD raised 80 → 300 so TG reports stay in Single Doc mode
+# 8. Adaptive summarisation — short/medium/long map-reduce
+# 9. WORD DOCUMENT SUPPORT (this update)
+#    - Accepts .pdf and .docx uploads
+#    - extract_text_from_docx() pulls full text from all paragraphs and tables
+#    - Estimates page count from word count (~250 words/page) for .docx
+#    - Word files always use Single Document Mode (no chapter splitting)
+#    - Book Mode only available for PDF uploads
+#    - All downstream summarisation and exam generation unchanged
 # ============================================================
 
 import os
@@ -34,6 +36,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from pypdf import PdfReader
+from docx import Document as DocxDocument
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai import AuthenticationError, RateLimitError, BadRequestError
@@ -445,6 +448,38 @@ def extract_toc_from_pdf(file_bytes: bytes, total_pages: int) -> list[dict]:
         c["end"] = unique[i + 1]["start"] - 1 if i + 1 < len(unique) else total_pages
         c["end"] = max(c["start"], c["end"])
     return unique
+
+
+# ============================================================
+# Word document (.docx) extraction
+# ============================================================
+def extract_text_from_docx(file_bytes: bytes) -> tuple[str, int]:
+    """
+    Extract all text from a .docx file.
+    Returns (text, estimated_pages).
+    Pages estimated at ~250 words per page — not exact but
+    good enough for doc-size classification and UI display.
+    Tables are included: each cell extracted as a line.
+    """
+    doc   = DocxDocument(io.BytesIO(file_bytes))
+    parts = []
+
+    for para in doc.paragraphs:
+        t = (para.text or "").strip()
+        if t:
+            parts.append(t)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                t = (cell.text or "").strip()
+                if t:
+                    parts.append(t)
+
+    text       = "\n".join(parts).strip()
+    word_count = len(text.split())
+    est_pages  = max(1, round(word_count / 250))
+    return text, est_pages
 
 
 # ============================================================
@@ -995,16 +1030,23 @@ if auth_tab == "Dashboard":
 
 
 # ============================================================
-# STEP 1 — Upload PDF
+# STEP 1 — Upload document (PDF or Word)
 # ============================================================
 st.markdown('<div class="ex-section-label">Step 1 — Upload your document</div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Upload a text-based PDF", type=["pdf"], label_visibility="collapsed")
+
+# File type hint
+st.caption("Accepted formats: PDF (.pdf) · Word document (.docx)")
+uploaded = st.file_uploader(
+    "Upload a PDF or Word document",
+    type=["pdf", "docx"],
+    label_visibility="collapsed",
+)
 
 if not uploaded:
     st.session_state.uploaded_file_bytes = None
     st.session_state.uploaded_file_name  = None
     st.session_state.doc_mode            = None
-    st.info("📂 Upload a PDF to begin.")
+    st.info("📂 Upload a PDF or Word document (.docx) to begin.")
     st.stop()
 
 if (st.session_state.uploaded_file_bytes is None
@@ -1015,18 +1057,77 @@ if (st.session_state.uploaded_file_bytes is None
     st.session_state.doc_mode            = None
     reset_doc_state()
     ga_event("upload_clicked",
-             params={"pdf_name": uploaded.name},
+             params={"file_name": uploaded.name},
              once_key=f"upload_{uploaded.name}")
 
-file_bytes  = st.session_state.uploaded_file_bytes
-pdf_name    = uploaded.name
-total_pages = get_pdf_page_count(file_bytes)
+file_bytes = st.session_state.uploaded_file_bytes
+file_name  = uploaded.name
+is_docx    = file_name.lower().endswith(".docx")
 
+# ── For Word files: extract text immediately and lock to Single Doc mode ──
+if is_docx:
+    if st.session_state.get("_last_extracted_key") != ("docx", file_name, len(file_bytes)):
+        with st.spinner("Reading Word document..."):
+            docx_text, docx_est_pages = extract_text_from_docx(file_bytes)
+        st.session_state["_docx_text"]      = docx_text
+        st.session_state["_docx_est_pages"] = docx_est_pages
+        st.session_state["_last_extracted_key"] = ("docx", file_name, len(file_bytes))
+    else:
+        docx_text      = st.session_state["_docx_text"]
+        docx_est_pages = st.session_state["_docx_est_pages"]
 
-# ============================================================
-# STEP 2 — Auto-detect document type
-# ============================================================
-is_likely_book = total_pages >= BOOK_PAGE_THRESHOLD
+    if len(docx_text) < 200:
+        st.error(
+            "⚠️ Very little text extracted from this Word file. "
+            "It may be empty, image-only, or corrupted.")
+        st.stop()
+
+    # Word files always → Single Document Mode, no mode picker needed
+    st.session_state.doc_mode  = "single"
+    st.session_state.scope_mode = "Single Document (Word)"
+    total_pages = docx_est_pages
+    pdf_name    = file_name
+
+    doc_size   = classify_doc_size(docx_text)
+    status_cls = "ex-status-long" if doc_size == "long" else "ex-status"
+    word_count = len(docx_text.split())
+    st.markdown(
+        f'<div class="{status_cls}">✅ <strong>{file_name}</strong> &nbsp;·&nbsp; '
+        f'~{docx_est_pages} pages (estimated) &nbsp;·&nbsp; {word_count:,} words &nbsp;·&nbsp; '
+        f'{len(docx_text):,} chars</div>',
+        unsafe_allow_html=True)
+    st.info("📝 Word document — using Single Document Mode. "
+            "Book Mode is available for PDF files only.")
+
+    if doc_size == "long":
+        st.info("📋 **Long document** — multi-section summarisation will be used for full coverage.")
+    elif doc_size == "medium":
+        st.info("📋 **Medium document** — summarising in sections for good coverage.")
+
+    # Set variables expected by Steps 4–7
+    text          = docx_text
+    sp, ep        = 1, docx_est_pages
+    section_title = ""
+    section_label = ""
+    start_page, end_page = 1, docx_est_pages
+
+    ga_event("pdf_processed",
+             params={"file_name": file_name, "pages": f"1-{docx_est_pages}",
+                     "mode": "docx", "doc_size": doc_size},
+             once_key=f"processed_{file_name}_docx")
+
+    # Skip Steps 2 and 3 entirely for Word files
+    st.markdown('<div class="ex-section-label">Step 3 — Study Summary</div>', unsafe_allow_html=True)
+
+else:
+    # ── PDF path ──
+    pdf_name    = file_name
+    total_pages = get_pdf_page_count(file_bytes)
+
+    # ============================================================
+    # STEP 2 — Auto-detect document type (PDF only)
+    # ============================================================
+    is_likely_book = total_pages >= BOOK_PAGE_THRESHOLD
 
 if st.session_state.doc_mode is None:
     st.markdown('<div class="ex-section-label">Step 2 — Choose study mode</div>', unsafe_allow_html=True)
