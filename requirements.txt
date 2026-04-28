@@ -2,3 +2,5 @@ streamlit
 pypdf
 python-dotenv
 openai
+requests
+python-docx
