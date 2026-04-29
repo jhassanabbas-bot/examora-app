@@ -1394,14 +1394,15 @@ with st.expander(f"Mode: **{'📄 Single Document' if doc_mode=='single' else '�
 
 
 # ============================================================
-# STEP 3A — Single Document Mode
+# STEP 3A — Single Document Mode (PDF only)
 # ============================================================
 start_page, end_page = 1, total_pages
 section_label = ""
 section_title = ""
 sp, ep = 1, total_pages
 
-if doc_mode == "single":
+if not is_docx:
+  if doc_mode == "single":
     st.session_state.scope_mode = "Single Document"
     st.markdown(f'<div class="ex-section-label">📄 {pdf_name}</div>', unsafe_allow_html=True)
 
@@ -1442,6 +1443,16 @@ if doc_mode == "single":
         unsafe_allow_html=True)
 
     if doc_size == "long":
+        st.info("📋 **Long document** — multi-section summarisation will be used for full coverage.")
+    elif doc_size == "medium":
+        st.info("📋 **Medium document** — summarising in sections for good coverage.")
+
+    ga_event("pdf_processed",
+             params={"file_name": file_name, "pages": f"{sp}-{ep}",
+                     "mode": "single", "doc_size": doc_size},
+             once_key=f"processed_{file_name}_{sp}_{ep}_single")
+
+    if doc_size == "long":
         st.info(
             "📋 **Long document detected** — Examora will use multi-section summarisation "
             "to cover the full document. Summary generation will take slightly longer "
@@ -1458,9 +1469,9 @@ if doc_mode == "single":
 
 
 # ============================================================
-# STEP 3B — Book Mode
+# STEP 3B — Book Mode (PDF only)
 # ============================================================
-else:
+  else:
     st.session_state.scope_mode = "Book Mode"
     st.markdown(f'<div class="ex-section-label">📚 {pdf_name}</div>', unsafe_allow_html=True)
 
