@@ -1006,15 +1006,16 @@ div.stButton > button[kind="primary"] {
   .r-q   { font-size: 13px !important; }
   .r-ans { font-size: 12px !important; }
 
-  /* Question grid buttons — compact and horizontal */
+  /* Question grid buttons — compact squares */
   div[data-testid="stHorizontalBlock"] div.stButton > button {
-    min-height: 40px !important;
+    min-height: 44px !important;
+    height: 44px !important;
     font-size: 13px !important;
-    padding: 4px 2px !important;
+    padding: 0 4px !important;
     width: 100% !important;
   }
 
-  /* Tighter columns gap on mobile */
+  /* Reduce gap between grid columns */
   div[data-testid="stHorizontalBlock"] {
     gap: 4px !important;
   }
@@ -1825,47 +1826,21 @@ st.progress(answered_count / total if total else 0,
 
 st.markdown("**Jump to question:**")
 
-# Build HTML button grid — works reliably on mobile Safari
-# st.columns() stacks vertically on mobile, HTML flex wraps correctly
-grid_html = '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;">'
+# Use st.columns but with sensible count and full labels
+# This works reliably on both desktop and mobile
+n_grid_cols = min(total, 5)
+grid_cols   = st.columns(n_grid_cols)
 for i in range(total):
     qn         = i + 1
     ans_ok     = st.session_state.answers.get(qn) in ["A","B","C","D"]
     is_flagged = qn in st.session_state.flagged
     lbl        = str(qn) + ("⚑" if is_flagged else "") + ("✓" if ans_ok else "")
-    if qn == st.session_state.q_index + 1:
-        bg = "#2563eb"; color = "#fff"   # current question — blue
-    elif ans_ok:
-        bg = "#d1fae5"; color = "#065f46"  # answered — green tint
-    elif is_flagged:
-        bg = "#fef3c7"; color = "#92400e"  # flagged — amber tint
-    else:
-        bg = "#f1f5f9"; color = "#374151"  # unanswered — grey
-    grid_html += (
-        f'<button onclick="window.parent.postMessage({{type:\'streamlit:setComponentValue\','
-        f'value:{i}}}, \'*\')" '
-        f'style="min-width:44px; height:44px; border-radius:8px; border:1px solid #e2e8f0; '
-        f'background:{bg}; color:{color}; font-weight:700; font-size:14px; cursor:pointer; '
-        f'padding:0 8px; touch-action:manipulation;">'
-        f'{lbl}</button>'
-    )
-grid_html += '</div>'
-st.markdown(grid_html, unsafe_allow_html=True)
-
-# Fallback hidden selectbox for actual navigation
-# (HTML buttons above are visual only on Streamlit — use selectbox for real jumps)
-q_options = [f"Q{i+1}" for i in range(total)]
-selected_q = st.selectbox(
-    "Go to question",
-    options=list(range(total)),
-    index=st.session_state.q_index,
-    format_func=lambda i: f"Question {i+1}",
-    key="q_jump_select",
-    label_visibility="collapsed",
-)
-if selected_q != st.session_state.q_index:
-    st.session_state.q_index = selected_q
-    st.rerun()
+    if grid_cols[i % n_grid_cols].button(
+            lbl, key=f"grid_{qn}",
+            disabled=st.session_state.submitted,
+            use_container_width=True):
+        st.session_state.q_index = i
+        st.rerun()
 
 st.write("")
 
@@ -1903,13 +1878,15 @@ if study_mode_now and not st.session_state.submitted and choice in ["A","B","C",
 
 nav_c1, nav_c2, nav_c3 = st.columns(3)
 with nav_c1:
-    if st.button("◀ Previous", disabled=st.session_state.submitted or idx == 0,
+    if st.button("◀ Prev", disabled=st.session_state.submitted or idx == 0,
                  use_container_width=True):
-        st.session_state.q_index = idx - 1; st.rerun()
+        st.session_state.q_index = idx - 1
+        st.rerun()
 with nav_c2:
-    if st.button("Next ▶", disabled=st.session_state.submitted or idx == total-1,
+    if st.button("Next ▶", disabled=st.session_state.submitted or idx == total - 1,
                  use_container_width=True):
-        st.session_state.q_index = idx + 1; st.rerun()
+        st.session_state.q_index = idx + 1
+        st.rerun()
 with nav_c3:
     if st.button("⚑ Flag", disabled=st.session_state.submitted,
                  use_container_width=True):
