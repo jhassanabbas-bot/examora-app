@@ -1855,21 +1855,53 @@ st.progress(answered_count / total if total else 0,
 
 st.markdown("**Jump to question:**")
 
-# Use st.columns but with sensible count and full labels
-# This works reliably on both desktop and mobile
-n_grid_cols = min(total, 5)
-grid_cols   = st.columns(n_grid_cols)
+# ── Visual grid (HTML) — renders correctly on all screen sizes ──
+# Clicking a number updates a hidden selectbox which triggers st.rerun()
+btn_styles = []
 for i in range(total):
     qn         = i + 1
     ans_ok     = st.session_state.answers.get(qn) in ["A","B","C","D"]
     is_flagged = qn in st.session_state.flagged
-    lbl        = str(qn) + ("⚑" if is_flagged else "") + ("✓" if ans_ok else "")
-    if grid_cols[i % n_grid_cols].button(
-            lbl, key=f"grid_{qn}",
-            disabled=st.session_state.submitted,
-            use_container_width=True):
-        st.session_state.q_index = i
-        st.rerun()
+    is_current = (qn == st.session_state.q_index + 1)
+
+    if is_current:
+        bg, color, border = "#2563eb", "#fff", "#2563eb"
+    elif ans_ok:
+        bg, color, border = "#d1fae5", "#065f46", "#6ee7b7"
+    elif is_flagged:
+        bg, color, border = "#fef3c7", "#92400e", "#fcd34d"
+    else:
+        bg, color, border = "#f8fafc", "#374151", "#e2e8f0"
+
+    lbl = str(qn) + ("⚑" if is_flagged else "") + ("✓" if ans_ok else "")
+    btn_styles.append(
+        f'<button onclick="document.getElementById(\'qjump\').value=\'{i}\'; '
+        f'document.getElementById(\'qjump\').dispatchEvent(new Event(\'change\'))" '
+        f'style="width:48px;height:42px;margin:3px;border-radius:8px;'
+        f'border:1px solid {border};background:{bg};color:{color};'
+        f'font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation;">'
+        f'{lbl}</button>'
+    )
+
+grid_html = (
+    '<div style="display:flex;flex-wrap:wrap;gap:0;margin-bottom:12px;">'
+    + "".join(btn_styles)
+    + "</div>"
+)
+st.markdown(grid_html, unsafe_allow_html=True)
+
+# ── Functional navigation — compact dropdown that actually works ──
+jump_to = st.selectbox(
+    "Go to question",
+    options=list(range(total)),
+    index=st.session_state.q_index,
+    format_func=lambda i: f"Question {i + 1}",
+    key="q_nav_select",
+    label_visibility="collapsed",
+)
+if jump_to != st.session_state.q_index:
+    st.session_state.q_index = jump_to
+    st.rerun()
 
 st.write("")
 
